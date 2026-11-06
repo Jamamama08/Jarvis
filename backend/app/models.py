@@ -278,6 +278,8 @@ class Task(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[TaskStatus] = mapped_column(_enum(TaskStatus), nullable=False, default=TaskStatus.pending)
+    #: "todo" (task list item), "agent" (autonomous run), or "step" (a step of an autonomous run).
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="todo", server_default="todo")
     plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -352,6 +354,7 @@ class ApiUsage(Base):
         ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
     )
     message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

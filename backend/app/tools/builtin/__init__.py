@@ -24,6 +24,7 @@ from app.tools.builtin.data_tools import (
 from app.tools.builtin.files import delete_file, read_file, search_files, write_file
 from app.tools.builtin.python_exec import run_python
 from app.tools.builtin.summarize import summarize_document
+from app.tools.builtin.task_tools import check_task, start_task
 
 BUILTIN_TOOLS = [
     calculator,
@@ -50,4 +51,6 @@ BUILTIN_TOOLS = [
     list_desktop_apps,
     open_desktop_app,
     open_workspace_file,
+    start_task,
+    check_task,
 ]

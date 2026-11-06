@@ -314,6 +314,7 @@ class ToolExecutionOut(ORMModel):
     id: str
     conversation_id: str | None
     message_id: str | None
+    task_id: str | None = None
     tool_use_id: str | None = None
     tool_name: str
     permission_level: str

@@ -100,10 +100,11 @@ class ProviderJSONError(Exception):
 class ProviderError(Exception):
     """A provider failure with a message that is safe to show the user."""
 
-    def __init__(self, user_message: str, *, usage: "Completed | None" = None):
+    def __init__(self, user_message: str, *, usage: "Completed | None" = None, retryable: bool = False):
         super().__init__(user_message)
         self.user_message = user_message
         self.usage = usage  # tokens billed before the failure, if any
+        self.retryable = retryable  # transient (rate limit, overload, network): worth retrying later
 
 
 class ChatProvider(Protocol):
@@ -174,6 +175,12 @@ def _api_message(exc: anthropic.APIStatusError) -> str:
         if isinstance(error, dict) and isinstance(error.get("message"), str):
             return error["message"]
     return exc.message
+
+
+def _retryable(exc: Exception) -> bool:
+    if isinstance(exc, (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APITimeoutError)):
+        return True
+    return isinstance(exc, anthropic.APIStatusError) and (exc.status_code >= 500 or exc.status_code == 529)
 
 
 def _error_message(exc: Exception) -> str:
@@ -280,7 +287,7 @@ class ClaudeProvider:
         except anthropic.AnthropicError as exc:
             request_id = getattr(getattr(exc, "response", None), "headers", {}).get("request-id", "-")
             log.warning("Claude request failed: %s (request-id %s)", type(exc).__name__, request_id)
-            raise ProviderError(_error_message(exc)) from exc
+            raise ProviderError(_error_message(exc), retryable=_retryable(exc)) from exc
         except ValueError as exc:  # unparseable streamed tool input (eager input streaming)
             raise ProviderJSONError(str(exc)) from exc
 
@@ -316,7 +323,7 @@ async def complete_text(
         response = await provider.client.beta.messages.create(**request)
     except anthropic.AnthropicError as exc:
         log.warning("Claude request failed: %s", type(exc).__name__)
-        raise ProviderError(_error_message(exc)) from exc
+        raise ProviderError(_error_message(exc), retryable=_retryable(exc)) from exc
     usage = Completed(
         stop_reason=response.stop_reason or "end_turn",
         model=response.model,
@@ -349,7 +356,7 @@ async def complete_json(
         response = await provider.client.beta.messages.create(**request)
     except anthropic.AnthropicError as exc:
         log.warning("Claude JSON request failed: %s", type(exc).__name__)
-        raise ProviderError(_error_message(exc)) from exc
+        raise ProviderError(_error_message(exc), retryable=_retryable(exc)) from exc
     usage = Completed(
         stop_reason=response.stop_reason or "end_turn",
         model=response.model,

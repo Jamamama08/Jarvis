@@ -3,8 +3,9 @@ import { Check, ListChecks, Loader2, Menu, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { relativeTime } from "../lib/format";
 import type { Task } from "../lib/types";
+import { AgentTasks } from "../components/AgentTasks";
 
-/** The user's task list. JARVIS manages it with its task tools; autonomous execution of tasks is Phase 7. */
+/** Autonomous tasks (JARVIS works on a goal by itself) and the user's to-do list. */
 export function TasksView({ onOpenSidebar, onOpenConversation }: { onOpenSidebar: () => void; onOpenConversation: (id: string) => void }) {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [title, setTitle] = useState("");
@@ -32,10 +33,13 @@ export function TasksView({ onOpenSidebar, onOpenConversation }: { onOpenSidebar
           <Menu size={18} />
         </button>
         <h2 className="text-sm font-medium">Tasks</h2>
-        <span className="hidden text-xs text-ink-faint sm:inline">Ask JARVIS to add or update tasks, or manage them here. Autonomous task execution arrives in Phase 7.</span>
+        <span className="hidden text-xs text-ink-faint sm:inline">Autonomous tasks JARVIS works on by itself, and your to-do list.</span>
       </header>
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-4 px-4 py-6">
+          <h3 className="text-xs font-medium tracking-wider text-ink-faint uppercase">Autonomous tasks</h3>
+          <AgentTasks onOpenConversation={onOpenConversation} />
+          <h3 className="pt-4 text-xs font-medium tracking-wider text-ink-faint uppercase">To-do list</h3>
           <form
             className="card flex gap-2 p-3"
             onSubmit={(e) => {

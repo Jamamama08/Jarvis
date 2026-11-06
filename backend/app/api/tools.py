@@ -128,14 +128,14 @@ async def list_executions(
 
 async def _owned_task(db, user_id: str, task_id: str) -> Task:
     task = await db.get(Task, task_id)
-    if task is None or task.user_id != user_id:
+    if task is None or task.user_id != user_id or task.kind != "todo":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     return task
 
 
 @router.get("/tasks", response_model=list[TaskOut])
 async def list_tasks(user: CurrentUser, db: DbSession, state: Literal["open", "done", "all"] = "all"):
-    stmt = select(Task).where(Task.user_id == user.id, Task.parent_id.is_(None))
+    stmt = select(Task).where(Task.user_id == user.id, Task.kind == "todo")
     if state == "open":
         stmt = stmt.where(Task.status.notin_([TaskStatus.completed, TaskStatus.cancelled, TaskStatus.failed]))
     elif state == "done":

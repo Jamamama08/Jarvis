@@ -32,7 +32,7 @@ class ListTasksInput(BaseModel):
 
 
 async def _list_tasks(ctx: ToolContext, args: ListTasksInput) -> str:
-    stmt = select(Task).where(Task.user_id == ctx.user_id, Task.parent_id.is_(None)).order_by(Task.created_at)
+    stmt = select(Task).where(Task.user_id == ctx.user_id, Task.kind == "todo").order_by(Task.created_at)
     if args.status == "open":
         stmt = stmt.where(Task.status.in_([TaskStatus.pending, TaskStatus.running, TaskStatus.waiting_approval]))
     elif args.status == "completed":
@@ -52,7 +52,7 @@ class UpdateTaskInput(BaseModel):
 
 async def _owned_task(ctx: ToolContext, task_id: str) -> Task:
     task = await ctx.db.get(Task, task_id)
-    if task is None or task.user_id != ctx.user_id:
+    if task is None or task.user_id != ctx.user_id or task.kind != "todo":
         raise ToolError("No task with that id.")
     return task
 

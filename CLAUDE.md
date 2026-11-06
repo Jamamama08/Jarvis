@@ -4,7 +4,7 @@ JARVIS is a personal AI assistant with a web app and a Windows desktop app (Taur
 
 ## Current phase
 
-**Phases 1-6 (Foundation, Claude integration, Persistent memory, Voice, Tool system, Browser and desktop automation) are complete. Phase 7 (Autonomous tasks) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+**Phases 1-7 (Foundation, Claude integration, Persistent memory, Voice, Tool system, Browser and desktop automation, Autonomous tasks) are complete. Phase 8 (External integrations and deployment) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
 
 **Working agreement (from the user):** don't ask for permission to begin the next phase. When a phase is tested, documented, committed and pushed, continue straight to the next one.
 
@@ -89,7 +89,15 @@ cd frontend && npx vite build && npx playwright test --trace off
 - `app/automation/desktop.py`: app allow-list (user-managed only, no tool can add apps), one optional target (http(s) URL or workspace file, never starting with `-`), `safe_env()` for child processes, `check_openable` refuses executables. Desktop tools are only offered when `settings.desktop_control_active`.
 - Python Playwright must match the installed browser build (`playwright==1.63.0` here; `python -m playwright install chromium` on new machines).
 
-## Phase 7 entry points
+## Autonomous task notes
 
-- The `tasks` table has `parent_id`, `plan` (JSON), `status`, `result`, `error`, `attempts`, `started_at`/`finished_at`. Autonomous runs should reuse `run_turn`'s tool execution (`_tool_call`) and permission/approval flow rather than a second loop.
-- Requirements: break requests into steps (a plan), run steps sequentially, run independent ones in parallel when safe (read-only/automatic tools only), retry recoverable failures, verify results, explain outcomes, history, cancellation. Enforce limits (rule 4).
+- `services/chat.py`: `AgentRun` + `agent_loop` is the one agent loop (chat turns and task steps). Change behaviour there, not in callers. `allowed_levels` restricts tools (parallel steps = automatic only), `unit` words the limit notices.
+- `services/tasks.py`: `TaskRunner` (on `app.state.task_runner`, also `services["tasks"]` for tools). Tasks use `kind`: `todo` (to-do list), `agent` (a run), `step` (child of a run, `parent_id`). The to-do APIs and tools must only touch `kind == "todo"`.
+- Step usage rows carry `task_id` (step id); planner/verifier rows carry the run id. `task_tokens()` sums both.
+- Steps report `STEP_RESULT: success|failure: reason`; `parse_step_result` interprets it. `ProviderError.retryable` drives transient retries (`task_retry_base_seconds` backoff; tests set it to 0).
+- Background jobs die with the process: `recover()` marks them failed at startup. Never leave a step `pending` when its run ends (`_mark`).
+
+## Phase 8 entry points
+
+- Deployment: bundle the backend as a Tauri sidecar (PyInstaller) so the desktop app starts it; Windows installer (NSIS/MSI); document remote access (VPN or TLS reverse proxy, `JARVIS_SETUP_TOKEN`), backups.
+- External integrations: free/standard protocols first (e.g. iCalendar, IMAP/SMTP); any paid API must be stated before adding. Sending communications is restricted, financial actions sensitive.

@@ -80,6 +80,13 @@ class Settings(BaseSettings):
     browser_idle_timeout_seconds: float = Field(default=600.0, gt=0)
     browser_navigation_timeout_seconds: float = Field(default=30.0, gt=0)
 
+    # --- Autonomous tasks (Phase 7) -----------------------------------------------------
+    task_token_budget: int = Field(default=1_000_000, ge=10_000)  # all requests of one task
+    task_timeout_seconds: float = Field(default=1800.0, gt=0)
+    task_approval_timeout_seconds: float = Field(default=3600.0, gt=0)  # you may not be watching
+    max_concurrent_tasks: int = Field(default=2, ge=1, le=10)  # per user
+    task_retry_base_seconds: float = Field(default=2.0, ge=0)  # backoff for transient API errors
+
     # --- Desktop control (Phase 6) ------------------------------------------------------
     # None = on only when the server listens on loopback (i.e. it runs on your own machine).
     desktop_control_enabled: bool | None = None

@@ -41,6 +41,23 @@ function Shell({ user }: { user: User }) {
   const [search, setSearch] = useState("");
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [tasksNeedingApproval, setTasksNeedingApproval] = useState(0);
+
+  // Background tasks may need approval while you're elsewhere in the app: check periodically.
+  useEffect(() => {
+    let stop = false;
+    const check = () =>
+      api
+        .listAgentTasks()
+        .then((ts) => !stop && setTasksNeedingApproval(ts.filter((t) => t.status === "waiting_approval").length))
+        .catch(() => {});
+    void check();
+    const t = setInterval(check, 5000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, []);
   const searchRef = useRef(search);
   searchRef.current = search;
 
@@ -97,6 +114,7 @@ function Shell({ user }: { user: User }) {
         onLogout={() => void logout()}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        tasksNeedingApproval={tasksNeedingApproval}
       />
       <main className="flex min-w-0 flex-1">
         {route.view === "chat" && (

@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
 import anyio
@@ -209,10 +209,147 @@ def _joined(parts: list[list[str]]) -> str:
 
 @dataclass
 class TurnState:
-    """Mutable state of one agent turn, shared with the tool-call helper."""
+    """Mutable state of one agent run, shared with the tool-call helper."""
 
     cancelled: bool = False
     tokens_used: int = 0
+
+
+@dataclass
+class AgentRun:
+    """Everything one agent loop needs, plus what it produces.
+
+    Used by chat turns (run_turn) and by autonomous task steps (services/tasks.py), so both share
+    one implementation of tool calling, permissions, approvals, limits and logging.
+    """
+
+    # --- inputs ---
+    sessionmaker: async_sessionmaker[AsyncSession]
+    settings: Settings
+    provider: ChatProvider
+    user_id: str
+    model: str
+    max_tokens: int
+    effort: str | None
+    system: str
+    history: list[ChatTurn]
+    tool_defs: list[dict]
+    cancel_event: asyncio.Event
+    usage_db: AsyncSession  # where api_usage rows are written (one session per concurrent run)
+    tools: ToolRegistry | None = None
+    approvals: ApprovalBroker | None = None
+    services: dict = field(default_factory=dict)
+    conversation_id: str | None = None
+    message_id: str | None = None
+    task_id: str | None = None
+    deadline: float = float("inf")  # event-loop time
+    max_iterations: int = 10
+    token_budget: int = 400_000
+    approval_timeout: float = 300.0
+    #: If set, only tools at these permission levels may run (parallel task steps are read-only).
+    allowed_levels: frozenset[PermissionLevel] | None = None
+    unit: str = "message"  # wording for limit notices
+    # --- outputs ---
+    state: TurnState = field(default_factory=TurnState)
+    parts: list[list[str]] = field(default_factory=list)  # displayed text, one list per model request
+    exchange: list[dict] = field(default_factory=list)  # API messages produced (for replay)
+    used_tools: bool = False
+    notice: str | None = None
+    last: Completed | None = None
+
+    @property
+    def text(self) -> str:
+        return _joined(self.parts)
+
+
+async def agent_loop(run: AgentRun) -> AsyncIterator[str]:
+    """Stream model requests and execute tool calls until Claude answers without tools or a limit
+    (iterations, deadline, token budget) is reached. Yields SSE frames; raises ProviderError."""
+    loop = asyncio.get_running_loop()
+    iteration = 0
+    json_retries = 0
+    while True:
+        if iteration >= run.max_iterations:
+            run.notice = f"Stopped after {iteration} steps (the limit per {run.unit}). Ask me to continue if needed."
+            return
+        if loop.time() >= run.deadline:
+            run.notice = f"Stopped because this {run.unit} hit the time limit."
+            return
+        iteration += 1
+        iter_parts: list[str] = []
+        run.parts.append(iter_parts)
+        completed: Completed | None = None
+        started: Started | None = None
+        try:
+            events = run.provider.stream(
+                run.history, model=run.model, max_tokens=run.max_tokens, system=run.system,
+                effort=run.effort, tools=run.tool_defs or None, tail=run.exchange,
+            )
+            # aclosing() closes the upstream HTTP stream immediately on cancel, so no more tokens are billed.
+            async with contextlib.aclosing(events):
+                async for event in events:
+                    if run.cancel_event.is_set():
+                        run.state.cancelled = True
+                        break
+                    if isinstance(event, TextDelta):
+                        iter_parts.append(event.text)
+                        yield sse("delta", {"text": event.text})
+                    elif isinstance(event, TextReset):
+                        iter_parts.clear()
+                        yield sse("reset", {"text": _joined(run.parts[:-1])})
+                    elif isinstance(event, ToolUseStart):
+                        yield sse("tool_start", {"id": event.id, "name": event.name, "server": event.server})
+                    elif isinstance(event, Started):
+                        started = event
+                    elif isinstance(event, Completed):
+                        completed = event
+        except ProviderJSONError:
+            # A streamed tool input was unparseable; nothing ran. Re-issue the request (bounded).
+            await _record_usage(run, _usage_row(None, started, iter_parts, True))
+            run.parts.pop()
+            json_retries += 1
+            if json_retries > 2:
+                raise ProviderError("Claude produced an unreadable tool request several times. Try rephrasing.")
+            yield sse("reset", {"text": _joined(run.parts)})
+            continue
+        finally:
+            if completed is not None or run.state.cancelled:
+                await _record_usage(run, _usage_row(completed, started, iter_parts, run.provider.configured))
+
+        if run.state.cancelled:
+            return
+        run.last = completed
+        if completed is None:
+            raise ProviderError("The response ended unexpectedly.")
+        if completed.stop_reason == "refusal":
+            return  # the caller discards a refused run's output
+        if not run.provider.configured:
+            return
+        run.exchange.append({"role": "assistant", "content": completed.content})
+        if completed.content and any(b.get("type") == "server_tool_use" for b in completed.content):
+            run.used_tools = True
+            async for frame in _log_server_tools(run, completed.content):
+                yield frame
+        if completed.stop_reason == "pause_turn":
+            continue  # a server tool paused the turn; re-send to resume
+        tool_uses = [b for b in completed.content if b.get("type") == "tool_use"]
+        if completed.stop_reason != "tool_use" or not tool_uses:
+            if completed.stop_reason == "max_tokens":
+                run.notice = "Reached the maximum output length, so this response may be cut off."
+            return
+        run.used_tools = True
+        results: list[dict] = []
+        for block in tool_uses:
+            holder: dict = {}
+            async for frame in _tool_call(run, block, holder):
+                yield frame
+            results.append(holder["result"])
+        run.exchange.append({"role": "user", "content": results})
+        if run.state.cancelled:
+            return
+        if run.state.tokens_used >= run.token_budget:
+            run.notice = f"Stopped because this {run.unit} used its token budget ({run.token_budget:,} tokens)."
+            return
 
 
 async def run_turn(
@@ -229,16 +366,9 @@ async def run_turn(
     approvals: ApprovalBroker | None = None,
     services: dict | None = None,
 ) -> AsyncIterator[str]:
-    """Async generator of SSE frames for one user turn: the agent loop.
-
-    Each iteration streams one model request. If Claude calls tools, each call is validated,
-    checked against the user's permissions (pausing for approval when needed), executed with a
-    timeout and logged; the results go back to Claude. The loop ends when Claude answers without
-    calling tools, or when a limit (iterations, wall-clock time, token budget) is reached.
-    Caller must have called registry.start().
-    """
+    """Async generator of SSE frames for one user turn: persist the message, run the agent loop,
+    persist the reply. Caller must have called registry.start()."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + settings.turn_timeout_seconds
     try:
         async with shielded_session(sessionmaker) as db:
             conversation = await db.get(Conversation, conversation_id)
@@ -287,107 +417,22 @@ async def run_turn(
                 prefs, user.display_name or user.username, date.today(),
                 tools_enabled=use_tools, web_search=provider.configured and prefs.web_search_enabled,
             )
+            run = AgentRun(
+                sessionmaker=sessionmaker, settings=settings, provider=provider, user_id=user_id, model=model,
+                max_tokens=max_tokens, effort=prefs.effort or None, system=system, history=history,
+                tool_defs=tool_defs, cancel_event=cancel_event, usage_db=db, tools=tools, approvals=approvals,
+                services=services or {}, conversation_id=conversation_id, message_id=reply.id,
+                deadline=loop.time() + settings.turn_timeout_seconds, max_iterations=settings.max_tool_iterations,
+                token_budget=settings.turn_token_budget, approval_timeout=settings.approval_timeout_seconds,
+            )
 
-            state = TurnState()
-            parts: list[list[str]] = []  # displayed text, one list per model request
-            exchange: list[dict] = []  # API messages produced during this turn (for replay)
-            used_tools = False
             final_status = MessageStatus.complete
             error: str | None = None
-            notice: str | None = None
-            last: Completed | None = None
-            iteration = 0
-            json_retries = 0
             try:
-                while True:
-                    if iteration >= settings.max_tool_iterations:
-                        notice = f"Stopped after {iteration} steps (the limit per message). Ask me to continue if needed."
-                        break
-                    if loop.time() >= deadline:
-                        notice = "Stopped because this message hit the time limit."
-                        break
-                    iteration += 1
-                    iter_parts: list[str] = []
-                    parts.append(iter_parts)
-                    completed: Completed | None = None
-                    started: Started | None = None
-                    try:
-                        events = provider.stream(
-                            history, model=model, max_tokens=max_tokens, system=system,
-                            effort=prefs.effort or None, tools=tool_defs or None, tail=exchange,
-                        )
-                        # aclosing() closes the upstream HTTP stream immediately on cancel, so no more tokens are billed.
-                        async with contextlib.aclosing(events):
-                            async for event in events:
-                                if cancel_event.is_set():
-                                    state.cancelled = True
-                                    break
-                                if isinstance(event, TextDelta):
-                                    iter_parts.append(event.text)
-                                    yield sse("delta", {"text": event.text})
-                                elif isinstance(event, TextReset):
-                                    iter_parts.clear()
-                                    yield sse("reset", {"text": _joined(parts[:-1])})
-                                elif isinstance(event, ToolUseStart):
-                                    yield sse("tool_start", {"id": event.id, "name": event.name, "server": event.server})
-                                elif isinstance(event, Started):
-                                    started = event
-                                elif isinstance(event, Completed):
-                                    completed = event
-                    except ProviderJSONError:
-                        # A streamed tool input was unparseable; nothing ran. Re-issue the request (bounded).
-                        await _record_usage(db, user_id, conversation_id, reply.id, _usage_row(None, started, iter_parts, True), state)
-                        parts.pop()
-                        json_retries += 1
-                        if json_retries > 2:
-                            raise ProviderError("Claude produced an unreadable tool request several times. Try rephrasing.")
-                        yield sse("reset", {"text": _joined(parts)})
-                        continue
-                    finally:
-                        if completed is not None or state.cancelled:
-                            await _record_usage(db, user_id, conversation_id, reply.id, _usage_row(completed, started, iter_parts, provider.configured), state)
-
-                    if state.cancelled:
-                        break
-                    last = completed
-                    if completed is None:
-                        raise ProviderError("The response ended unexpectedly.")
-                    if completed.stop_reason == "refusal":
-                        break  # handled at finalisation: partial output is discarded
-                    if not provider.configured:
-                        break
-                    exchange.append({"role": "assistant", "content": completed.content})
-                    if completed.content and any(b.get("type") == "server_tool_use" for b in completed.content):
-                        used_tools = True
-                        async for frame in _log_server_tools(sessionmaker, user_id, conversation_id, reply.id, completed.content):
-                            yield frame
-                    if completed.stop_reason == "pause_turn":
-                        continue  # a server tool paused the turn; re-send to resume
-                    tool_uses = [b for b in completed.content if b.get("type") == "tool_use"]
-                    if completed.stop_reason != "tool_use" or not tool_uses:
-                        if completed.stop_reason == "max_tokens":
-                            notice = "Reached the maximum output length, so this response may be cut off."
-                        break
-                    used_tools = True
-                    results: list[dict] = []
-                    for block in tool_uses:
-                        holder: dict = {}
-                        async for frame in _tool_call(
-                            block, holder, state=state, sessionmaker=sessionmaker, settings=settings, provider=provider,
-                            tools=tools, approvals=approvals, cancel_event=cancel_event, user_id=user_id,
-                            conversation_id=conversation_id, message_id=reply.id, model=model, usage_db=db,
-                            services=services or {},
-                        ):
-                            yield frame
-                        results.append(holder["result"])
-                    exchange.append({"role": "user", "content": results})
-                    if state.cancelled:
-                        break
-                    if state.tokens_used >= settings.turn_token_budget:
-                        notice = f"Stopped because this message used its token budget ({settings.turn_token_budget:,} tokens)."
-                        break
+                async for frame in agent_loop(run):
+                    yield frame
             except (asyncio.CancelledError, anyio.get_cancelled_exc_class()):
-                state.cancelled = True
+                run.state.cancelled = True
                 raise
             except ProviderError as exc:
                 final_status = MessageStatus.error
@@ -399,21 +444,23 @@ async def run_turn(
             finally:
                 # Shield persistence from client-disconnect cancellation.
                 with anyio.CancelScope(shield=True):
-                    if state.cancelled:
+                    last = run.last
+                    exchange = run.exchange
+                    if run.state.cancelled:
                         final_status = MessageStatus.cancelled
-                    reply.content = _joined(parts)
+                    reply.content = run.text
                     if last and last.model:
                         reply.model = last.model
-                    if last and last.stop_reason == "refusal" and not state.cancelled:
+                    if last and last.stop_reason == "refusal" and not run.state.cancelled:
                         # Output from a declined request must not be kept or replayed.
                         final_status = MessageStatus.error
                         reply.content = ""
                         exchange = []
                         category = f" (category: {last.refusal_category})" if last.refusal_category else ""
                         error = f"Claude declined to respond to this request{category}."
-                    if final_status == MessageStatus.complete and notice:
-                        error = notice
-                    if used_tools and exchange:
+                    if final_status == MessageStatus.complete and run.notice:
+                        error = run.notice
+                    if run.used_tools and exchange:
                         close_exchange(exchange, "Cancelled: the turn ended before this tool ran.")
                         reply.blocks = {"exchange": exchange}
                     if last:
@@ -431,12 +478,13 @@ async def run_turn(
         registry.finish(conversation_id)
 
 
-async def _record_usage(db: AsyncSession, user_id: str, conversation_id: str, message_id: str, usage: dict | None, state: TurnState) -> None:
+async def _record_usage(run: AgentRun, usage: dict | None) -> None:
     if not usage:
         return
-    state.tokens_used += _tokens(usage)
-    db.add(ApiUsage(user_id=user_id, conversation_id=conversation_id, message_id=message_id, **usage))
-    await safe_commit(db)
+    run.state.tokens_used += _tokens(usage)
+    run.usage_db.add(ApiUsage(user_id=run.user_id, conversation_id=run.conversation_id, message_id=run.message_id,
+                              task_id=run.task_id, **usage))
+    await safe_commit(run.usage_db)
 
 
 async def _message_tools(db: AsyncSession, message_id: str) -> list[dict]:
@@ -446,10 +494,10 @@ async def _message_tools(db: AsyncSession, message_id: str) -> list[dict]:
     return [executor.to_out(r, summary=(r.input or {}).get("_summary", "")) for r in rows]
 
 
-async def _log_server_tools(sessionmaker, user_id: str, conversation_id: str, message_id: str, content: list[dict]) -> AsyncIterator[str]:
+async def _log_server_tools(run: AgentRun, content: list[dict]) -> AsyncIterator[str]:
     """Record Anthropic-run web search/fetch calls in the activity log and show them in the UI."""
     results = {b.get("tool_use_id"): b for b in content if str(b.get("type", "")).endswith("_tool_result")}
-    async with shielded_session(sessionmaker) as tdb:
+    async with shielded_session(run.sessionmaker) as tdb:
         for block in content:
             if block.get("type") != "server_tool_use":
                 continue
@@ -457,8 +505,8 @@ async def _log_server_tools(sessionmaker, user_id: str, conversation_id: str, me
             ok, text = describe_server_result(result) if result else (False, "No result returned.")
             summary = str((block.get("input") or {}).get("query") or (block.get("input") or {}).get("url") or block.get("name"))
             ex = ToolExecution(
-                user_id=user_id, conversation_id=conversation_id, message_id=message_id, tool_use_id=block.get("id"),
-                tool_name=str(block.get("name")), permission_level=PermissionLevel.automatic,
+                user_id=run.user_id, conversation_id=run.conversation_id, message_id=run.message_id, task_id=run.task_id,
+                tool_use_id=block.get("id"), tool_name=str(block.get("name")), permission_level=PermissionLevel.automatic,
                 status=ToolExecutionStatus.succeeded if ok else ToolExecutionStatus.failed,
                 input={**executor.log_input(block.get("input") or {}), "_summary": summary[:200]},
                 output=executor.log_output(text) if ok else None, error=None if ok else text,
@@ -469,27 +517,11 @@ async def _log_server_tools(sessionmaker, user_id: str, conversation_id: str, me
             yield sse("tool_result", executor.to_out(ex, summary=summary[:200]))
 
 
-async def _tool_call(
-    block: dict,
-    holder: dict,
-    *,
-    state: TurnState,
-    sessionmaker,
-    settings: Settings,
-    provider: ChatProvider,
-    tools: ToolRegistry,
-    approvals: ApprovalBroker | None,
-    cancel_event: asyncio.Event,
-    user_id: str,
-    conversation_id: str,
-    message_id: str,
-    model: str,
-    usage_db: AsyncSession,
-    services: dict,
-) -> AsyncIterator[str]:
+async def _tool_call(run: AgentRun, block: dict, holder: dict) -> AsyncIterator[str]:
     """Validate, authorise, run and log one tool call. Puts the tool_result block in holder['result']."""
+    settings = run.settings
     tool_use_id, name, raw = block["id"], block.get("name", ""), block.get("input")
-    tool = tools.get(name)
+    tool = run.tools.get(name) if run.tools else None
     if tool is not None and not tool.enabled(settings):
         tool = None
     prep = executor.prepare(tool, name, raw)
@@ -497,10 +529,10 @@ async def _tool_call(
     def result(text: str, is_error: bool) -> None:
         holder["result"] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text, "is_error": is_error}
 
-    async with shielded_session(sessionmaker) as tdb:
+    async with shielded_session(run.sessionmaker) as tdb:
         execution = ToolExecution(
-            user_id=user_id, conversation_id=conversation_id, message_id=message_id, tool_use_id=tool_use_id,
-            tool_name=name[:100], permission_level=tool.level if tool else PermissionLevel.automatic,
+            user_id=run.user_id, conversation_id=run.conversation_id, message_id=run.message_id, task_id=run.task_id,
+            tool_use_id=tool_use_id, tool_name=name[:100], permission_level=tool.level if tool else PermissionLevel.automatic,
             status=ToolExecutionStatus.running, input={**(executor.log_input(raw) or {}), "_summary": prep.summary},
         )
         tdb.add(execution)
@@ -516,18 +548,29 @@ async def _tool_call(
             yield await emit("tool_result")
             return
 
+        if run.allowed_levels is not None and tool.level not in run.allowed_levels:
+            executor.finished(execution, ToolExecutionStatus.denied)
+            execution.error = "Not allowed in a parallel (read-only) step."
+            result(
+                f"{tool.name} can't be used in this step: it runs in parallel with other steps, so only read-only "
+                "tools are allowed. Do what you can without it and say what still needs doing.",
+                True,
+            )
+            yield await emit("tool_result")
+            return
+
         if tool.preview is not None:
             # Describe the call using live state (e.g. the element's label and the site) for the approval prompt.
             try:
-                async with shielded_session(sessionmaker) as preview_db:
-                    preview_ctx = ToolContext(db=preview_db, user_id=user_id, conversation_id=conversation_id,
-                                              settings=settings, provider=provider, model=model, services=services)
+                async with shielded_session(run.sessionmaker) as preview_db:
+                    preview_ctx = ToolContext(db=preview_db, user_id=run.user_id, conversation_id=run.conversation_id,
+                                              settings=settings, provider=run.provider, model=run.model, services=run.services)
                     prep.summary = (await asyncio.wait_for(tool.preview(preview_ctx, prep.args), 5))[:300]
                 execution.input = {**(execution.input or {}), "_summary": prep.summary}
             except Exception:  # cosmetic: fall back to the static summary
                 pass
 
-        decision = permissions.resolve(tool, await permissions.load_policies(tdb, user_id))
+        decision = permissions.resolve(tool, await permissions.load_policies(tdb, run.user_id))
         if decision == PermissionDecision.deny:
             executor.finished(execution, ToolExecutionStatus.denied)
             execution.error = "Blocked by your permission settings."
@@ -538,24 +581,24 @@ async def _tool_call(
         if decision == PermissionDecision.ask:
             execution.status = ToolExecutionStatus.pending_approval
             yield await emit("tool_call")
-            if approvals is None:
+            if run.approvals is None:
                 outcome = {"approve": False}
             else:
-                future = approvals.register(execution.id, user_id)
-                cancel_wait = asyncio.ensure_future(cancel_event.wait())
+                future = run.approvals.register(execution.id, run.user_id)
+                cancel_wait = asyncio.ensure_future(run.cancel_event.wait())
                 try:
-                    done, _ = await asyncio.wait({future, cancel_wait}, timeout=settings.approval_timeout_seconds, return_when=asyncio.FIRST_COMPLETED)
+                    done, _ = await asyncio.wait({future, cancel_wait}, timeout=run.approval_timeout, return_when=asyncio.FIRST_COMPLETED)
                 finally:
                     cancel_wait.cancel()
-                    approvals.discard(execution.id)
+                    run.approvals.discard(execution.id)
                 if future in done and not future.cancelled():
                     outcome = future.result()
-                elif cancel_wait in done or cancel_event.is_set():
+                elif cancel_wait in done or run.cancel_event.is_set():
                     outcome = {"cancelled": True}
                 else:
                     outcome = {"timeout": True}
             if outcome.get("cancelled"):
-                state.cancelled = True
+                run.state.cancelled = True
                 executor.finished(execution, ToolExecutionStatus.cancelled)
                 execution.error = "Cancelled before approval."
                 result("The user stopped the response before approving this action.", True)
@@ -573,21 +616,20 @@ async def _tool_call(
                 yield await emit("tool_result")
                 return
             if outcome.get("remember") and tool.level == PermissionLevel.restricted:
-                await permissions.set_policy(tdb, user_id, permissions.tool_scope(tool.name), PermissionDecision.allow, level=tool.level)
+                await permissions.set_policy(tdb, run.user_id, permissions.tool_scope(tool.name), PermissionDecision.allow, level=tool.level)
             execution.status = ToolExecutionStatus.approved
 
         execution.status = ToolExecutionStatus.running
         yield await emit("tool_call")
 
         async def record(usage: Completed) -> None:
-            row = _usage_row(usage, None, [], True)
-            await _record_usage(usage_db, user_id, conversation_id, message_id, row, state)
+            await _record_usage(run, _usage_row(usage, None, [], True))
 
-        # Each tool gets its own session so a failing tool can't break the turn's persistence.
-        async with shielded_session(sessionmaker) as tool_session:
+        # Each tool gets its own session so a failing tool can't break the run's persistence.
+        async with shielded_session(run.sessionmaker) as tool_session:
             ctx = ToolContext(
-                db=tool_session, user_id=user_id, conversation_id=conversation_id, settings=settings,
-                provider=provider, model=model, record_usage=record, services=services,
+                db=tool_session, user_id=run.user_id, conversation_id=run.conversation_id, settings=settings,
+                provider=run.provider, model=run.model, record_usage=record, services=run.services,
             )
             ok, output, duration = await executor.run(
                 tool, ctx, prep.args, default_timeout=settings.tool_timeout_seconds, output_limit=settings.max_tool_output_chars

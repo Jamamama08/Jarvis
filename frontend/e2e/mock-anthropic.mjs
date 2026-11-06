@@ -31,6 +31,38 @@ http
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     requests.push(body);
+    const system = String(body.system ?? "");
+    const jsonReply = (data) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_json", type: "message", role: "assistant", model: body.model,
+        content: [{ type: "text", text: JSON.stringify(data) }], stop_reason: "end_turn", stop_sequence: null,
+        usage: { input_tokens: 300, output_tokens: 60, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      }));
+    };
+    if (system.includes("plan autonomous tasks")) {
+      return jsonReply({
+        summary: "Research both suits in parallel, then write the comparison.",
+        steps: [
+          { title: "Research Mark 42", instructions: "Summarise the Mark 42.", depends_on: [], parallel_safe: true },
+          { title: "Research Mark 50", instructions: "Summarise the Mark 50.", depends_on: [], parallel_safe: true },
+          { title: "Write comparison", instructions: "Save comparison.md.", depends_on: [1, 2], parallel_safe: false },
+        ],
+      });
+    }
+    if (system.includes("check whether an autonomous task")) {
+      return jsonReply({ success: true, summary: "**All done.** The comparison is saved in `comparison.md`.", issues: [] });
+    }
+    const stepMatch = JSON.stringify(body.messages[0]?.content ?? "").match(/Your step \((\d+) of (\d+)\): ([^\\"]+)/);
+    if (stepMatch) {
+      const title = stepMatch[3].trim();
+      const lastMsg = body.messages.at(-1)?.content;
+      const hasResults = Array.isArray(lastMsg) && lastMsg.some((b) => b.type === "tool_result");
+      if (title.startsWith("Write") && !hasResults) {
+        return streamTool(res, body, "write_file", { path: "comparison.md", content: "# Mark 42 vs Mark 50\n", mode: "overwrite" });
+      }
+      return streamText(res, body, `${title}: done. STEP_RESULT: success`);
+    }
     if (body.output_config?.format) {
       // Structured-output request (memory suggestions): reply with a JSON message, not a stream.
       const prompt = String(body.messages.at(-1)?.content ?? "");
@@ -113,4 +145,28 @@ function pickTool(text, available) {
     }
   }
   return null;
+}
+
+function streamText(res, body, text) {
+  res.writeHead(200, { "content-type": "text/event-stream" });
+  const usage = { input_tokens: 120, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  res.write(frame("message_start", { type: "message_start", message: { id: "msg_s", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage } }));
+  res.write(frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }));
+  res.write(frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }));
+  res.write(frame("content_block_stop", { type: "content_block_stop", index: 0 }));
+  res.write(frame("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 20 } }));
+  res.write(frame("message_stop", { type: "message_stop" }));
+  res.end();
+}
+
+function streamTool(res, body, name, input) {
+  res.writeHead(200, { "content-type": "text/event-stream" });
+  const usage = { input_tokens: 120, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  res.write(frame("message_start", { type: "message_start", message: { id: "msg_t", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage } }));
+  res.write(frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: `toolu_${Date.now()}`, name, input: {} } }));
+  res.write(frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } }));
+  res.write(frame("content_block_stop", { type: "content_block_stop", index: 0 }));
+  res.write(frame("message_delta", { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 20 } }));
+  res.write(frame("message_stop", { type: "message_stop" }));
+  res.end();
 }

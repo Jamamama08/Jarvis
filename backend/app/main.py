@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app import __version__
-from app.api import auth, automation, conversations, memories, system, tools
+from app.api import agent_tasks, auth, automation, conversations, memories, system, tools
 from app.core.config import Settings, get_settings
 from app.core.db import Database
 from app.core.logging import configure_logging
@@ -18,6 +18,7 @@ from app.migrations import upgrade_to_head
 from app.services.chat import GenerationRegistry
 from app.services.providers import build_provider
 from app.automation.browser import BrowserManager
+from app.services.tasks import TaskRunner
 from app.tools.executor import ApprovalBroker
 from app.tools.registry import default_registry
 
@@ -34,10 +35,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.resolved_workspace_dir.mkdir(parents=True, exist_ok=True)
         await anyio.to_thread.run_sync(upgrade_to_head, settings.resolved_database_url)
         app.state.db = Database(settings)
+        app.state.task_runner = TaskRunner(
+            sessionmaker=app.state.db.sessionmaker, settings=settings, provider=app.state.provider,
+            tools=app.state.tools, approvals=app.state.approvals, services=app.state.tool_services,
+        )
+        app.state.tool_services["tasks"] = app.state.task_runner
+        interrupted = await app.state.task_runner.recover()
+        if interrupted:
+            log.warning("Marked %d interrupted task(s) as failed", interrupted)
         log.info("JARVIS %s ready (db=%s, ai=%s)", __version__, settings.sqlite_path, app.state.provider.name)
         try:
             yield
         finally:
+            await app.state.task_runner.shutdown()
             await app.state.browser.shutdown()
             await app.state.db.dispose()
 
@@ -67,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memories.router)
     app.include_router(tools.router)
     app.include_router(automation.router)
+    app.include_router(agent_tasks.router)
 
     _mount_frontend(app, settings.frontend_dist)
     return app

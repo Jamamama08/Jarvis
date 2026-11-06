@@ -40,6 +40,7 @@ export interface ToolExecution {
   id: string;
   conversation_id: string | null;
   message_id: string | null;
+  task_id?: string | null;
   tool_use_id: string | null;
   tool_name: string;
   permission_level: PermissionLevel;
@@ -258,4 +259,46 @@ export interface AutomationStatus {
   browser_headless: boolean;
   browser_private_network: boolean;
   browser_open_url: string | null;
+}
+
+export type AgentTaskStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
+
+export interface AgentTask {
+  id: string;
+  title: string;
+  goal: string;
+  status: AgentTaskStatus;
+  plan_summary: string;
+  result: string | null;
+  error: string | null;
+  issues: string[];
+  conversation_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps_total: number;
+  steps_done: number;
+  tokens: number;
+  estimated_cost_usd: number | null;
+  running: boolean;
+}
+
+export interface AgentStep {
+  id: string;
+  index: number;
+  title: string;
+  instructions: string;
+  depends_on: number[];
+  parallel_safe: boolean;
+  status: AgentTaskStatus;
+  result: string | null;
+  error: string | null;
+  attempts: number;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface AgentTaskDetail extends AgentTask {
+  steps: AgentStep[];
+  tools: ToolExecution[];
 }

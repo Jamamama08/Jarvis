@@ -38,7 +38,7 @@ export default defineConfig({
   use: { trace: "off", ...devices["Desktop Chrome"], viewport: { width: 1360, height: 860 } },
   projects: [
     { name: "offline", testMatch: "app.spec.ts", use: { baseURL: `http://127.0.0.1:${OFFLINE_PORT}` } },
-    { name: "claude", testMatch: /(claude|memory|voice|tools|automation)\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${CLAUDE_PORT}` } },
+    { name: "claude", testMatch: /(claude|memory|voice|tools|automation|tasks)\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${CLAUDE_PORT}` } },
   ],
   webServer: [
     {

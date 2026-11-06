@@ -35,6 +35,8 @@ interface Props {
   onLogout: () => void;
   open: boolean;
   onClose: () => void;
+  /** Autonomous tasks waiting for the user's approval. */
+  tasksNeedingApproval?: number;
 }
 
 export function Sidebar(props: Props) {
@@ -92,7 +94,7 @@ export function Sidebar(props: Props) {
 
         <div className="border-t border-line p-2">
           <NavItem icon={<Brain size={16} />} label="Memory" active={route.view === "memory"} onClick={() => onNavigate({ view: "memory" })} />
-          <NavItem icon={<ListChecks size={16} />} label="Tasks" active={route.view === "tasks"} onClick={() => onNavigate({ view: "tasks" })} />
+          <NavItem icon={<ListChecks size={16} />} label="Tasks" active={route.view === "tasks"} onClick={() => onNavigate({ view: "tasks" })} badge={props.tasksNeedingApproval} />
           <NavItem icon={<Wrench size={16} />} label="Tools" active={route.view === "tools"} onClick={() => onNavigate({ view: "tools" })} />
           <NavItem icon={<Settings size={16} />} label="Settings" active={route.view === "settings"} onClick={() => onNavigate({ view: "settings" })} />
           <div className="mt-2 flex items-center gap-2 rounded-lg px-2 py-2">
@@ -197,7 +199,7 @@ function MenuItem({ icon, label, onClick, danger }: { icon: React.ReactNode; lab
   );
 }
 
-function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+function NavItem({ icon, label, active, onClick, badge }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void; badge?: number }) {
   return (
     <button
       onClick={onClick}
@@ -208,6 +210,11 @@ function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; labe
     >
       <span className={active ? "text-arc" : ""}>{icon}</span>
       {label}
+      {badge ? (
+        <span className="ml-auto rounded-full bg-warn/20 px-1.5 text-[11px] text-warn" data-testid="tasks-badge" title="Tasks waiting for your approval">
+          {badge}
+        </span>
+      ) : null}
     </button>
   );
 }

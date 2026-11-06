@@ -40,6 +40,8 @@ const PRETTY: Record<string, string> = {
   list_desktop_apps: "List apps",
   open_desktop_app: "Open app",
   open_workspace_file: "Open file",
+  start_task: "Start autonomous task",
+  check_task: "Check task",
   web_fetch: "Fetch web page",
 };
 
