@@ -60,6 +60,10 @@ export interface Preferences {
   speak_responses: boolean;
   voice_name: string;
   speech_rate: number;
+  voice_provider: "browser";
+  voice_language: string;
+  voice_auto_send: boolean;
+  voice_conversation_mode: boolean;
   send_on_enter: boolean;
 }
 

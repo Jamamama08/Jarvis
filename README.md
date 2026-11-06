@@ -2,7 +2,7 @@
 
 A personal AI assistant powered by Claude. It runs as a **web app** in your browser and as a **Windows desktop app** (Tauri 2). Both use the same local backend, database and (from Phase 2 on) AI engine.
 
-> **Status: Phase 3 of 8 (Persistent memory) is complete.** JARVIS chats with Claude (streamed Markdown replies, context, model/effort/length settings, cancellation, usage and cost tracking) and has long-term memory you control: memories you approve are searched and sent with relevant messages. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice, and memory can still be managed. See the [roadmap](#roadmap).
+> **Status: Phase 4 of 8 (Voice) is complete.** JARVIS chats with Claude (streamed Markdown replies, context, model/effort/length settings, cancellation, usage and cost tracking), has long-term memory you control (only memories you approve are searched and sent with relevant messages), and supports voice: speak your messages and hear replies, using the browser's free built-in speech engines. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice. See the [roadmap](#roadmap).
 
 ---
 
@@ -12,6 +12,8 @@ A personal AI assistant powered by Claude. It runs as a **web app** in your brow
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Desktop app (Windows)](#desktop-app-windows)
+- [Memory](#memory)
+- [Voice](#voice)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Security model](#security-model)
@@ -59,6 +61,7 @@ Jarvis/
 ├── frontend/                React + TypeScript + Vite + Tailwind CSS 4
 │   ├── src/
 │   │   ├── components/      Sidebar, Composer, MessageBubble, Markdown, VoiceOrb, StatusPill
+│   │   ├── voice/           VoiceProvider interface, Web Speech implementation, useVoice, speech text
 │   │   ├── views/           Auth, Chat, Memory, Settings, Roadmap (Tasks placeholder)
 │   │   ├── hooks/           useAuth, useRoute
 │   │   └── lib/             API client, SSE parser, types, formatting
@@ -81,6 +84,7 @@ Jarvis/
 | Automatic prompt caching | Each request marks the conversation for caching, so on the next turn the earlier history is re-read at about 10% of the normal input price. The system prompt only changes once a day (it contains the date). |
 | Thinking and effort left at model defaults | Current models think adaptively. Effort is only sent when you pick one in Settings, so older models that reject it still work. |
 | Memories attached to the user turn, not the system prompt | Relevant memories are sent as a separate text block at the start of that user message and stored with it. Replayed history stays byte-identical, so prompt caching keeps working, and a memory already sent in a conversation isn't sent again. |
+| Voice in the browser behind a `VoiceProvider` interface | The free Web Speech API needs no new dependency or service. The app only talks to the recognizer/synthesizer interfaces in `frontend/src/voice/types.ts`, so a local engine (e.g. Whisper and Piper through the backend or a Tauri command) can replace it later. |
 | Suggestions instead of automatic memory | Claude never saves memories itself. "Suggest memories" makes one explicit request that returns pending suggestions (structured JSON output) for you to approve, edit or reject. |
 | Server-side refusal fallback | Current Claude models can decline a request via safety classifiers. With `fallbacks: "default"` the API retries it on Anthropic's recommended fallback model in the same call. On by default; `JARVIS_REFUSAL_FALLBACK=false` turns it off. |
 | Full schema in migration `0001` | Later phases add behaviour without risky table rebuilds. A test asserts the migrations match the models. |
@@ -167,6 +171,26 @@ Duplicates: an exact duplicate (ignoring case, spacing and punctuation) is refus
 
 Deleting a memory removes it immediately. Its history keeps the old text unless you tick **Also erase its change history**.
 
+## Voice
+
+- **Talk:** click the microphone (or enable voice in Settings first). Your words appear live in the message box; when you pause, the message is sent. Turn off **Send voice messages automatically** to review the text first. Esc cancels.
+- **Listen:** turn on **Speak replies aloud** in Settings → Voice. Replies are read out sentence by sentence while they stream; Markdown is read naturally, and code blocks are announced as "code block omitted". Every reply also has a **Read aloud** button.
+- **Interrupt:** start talking (click the mic), send a new message, press Esc, or click **Stop speaking**. The speaker icon in the chat header mutes spoken replies on this device.
+- **Hands-free conversation:** after a spoken message, JARVIS listens again once its reply has been read out.
+- **Settings → Voice:** voice, recognition language, speech rate, a **Test voice** button, and whether this browser supports voice input and spoken replies.
+
+Browser support and privacy:
+
+| | Voice input | Spoken replies |
+| --- | --- | --- |
+| Chrome | Yes. Audio is sent to **Google** for transcription. | Yes |
+| Edge | Yes. Audio is sent to **Microsoft** for transcription. | Yes |
+| Safari | Yes (may use Apple's servers) | Yes |
+| Firefox | No | Yes |
+| Desktop app (Windows WebView2) | **Not yet**: WebView2 has no speech recognition service. JARVIS says so and disables the mic. | Yes |
+
+Voice is free; it adds no Claude cost beyond the messages themselves. Spoken replies use voices installed on your device (some browser voices are online). For fully local, offline voice input, a local engine can be added later behind the same `VoiceProvider` interface.
+
 ## Configuration
 
 Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` prefix, except `ANTHROPIC_API_KEY`.
@@ -186,7 +210,7 @@ Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` p
 | `JARVIS_DATA_DIR` | `./data` | Database and backups |
 | `JARVIS_SESSION_TTL_HOURS` | `336` | Login session lifetime |
 
-User preferences (assistant name, model, effort, reply length cap, memory on/off, voice options, Enter-to-send) are stored per user in the database and edited on the Settings page. Settings also shows API usage (requests, tokens, cached tokens) with an estimated cost.
+User preferences (assistant name, model, effort, reply length cap, memory on/off, voice options (input, spoken replies, voice, language, rate, auto-send, hands-free), Enter-to-send) are stored per user in the database and edited on the Settings page. Settings also shows API usage (requests, tokens, cached tokens) with an estimated cost.
 
 ## Testing
 
@@ -196,8 +220,10 @@ User preferences (assistant name, model, effort, reply length cap, memory on/off
 
 That runs, in order:
 - **pytest** (`backend/tests`): auth, rate limiting, setup-token rule, conversation CRUD, ownership isolation, streaming, cancellation, persistence across restarts, backups, a migration/model drift check, log redaction, SPA serving, memory (CRUD, history, purge, exact and near duplicates, FTS search kept in sync by triggers, FTS query-injection safety, privacy between users, projects, persistence, retrieval into chat, no re-sending, pending and disabled memories never sent, suggestions with duplicate and secret filtering, approval/rejection, refusal and error handling, usage), and the Claude provider. The Claude tests run the real SDK against a mocked HTTP transport that replays the API's streaming format: request shape, history, preferences, prompt caching, refusals, mid-stream fallback, token-limit truncation, every error class, usage and cost recording, and that cancelling closes the upstream stream.
-- **tsc + vitest** (`frontend/src/**/*.test.ts(x)`): SSE parser, routing, formatting, Composer, MessageBubble, and Markdown safety (no raw HTML, no `javascript:` links, images shown as links).
+- **tsc + vitest** (`frontend/src/**/*.test.ts(x)`): SSE parser, routing, formatting, Composer (including the mic), MessageBubble, Markdown safety (no raw HTML, no `javascript:` links, images shown as links), and voice: Markdown-to-speech, sentence streaming that never speaks inside an open code block, the browser recognizer against a fake Web Speech API (transcripts, error messages, unsupported browsers and the desktop WebView), and `useVoice` (final text, cancel discards, spoken replies with the chosen voice, barge-in, mute, settings).
 - **Playwright** (`frontend/e2e`): two real backends serving the production build. One has no API key (setup, persistence, rename/pin/search/delete, settings, backups, sign-out). The other points `ANTHROPIC_BASE_URL` at `e2e/mock-anthropic.mjs`, a local stand-in for the API (Markdown replies, multi-turn context, stop button, model/effort settings, usage, and the memory flow: add, duplicate refusal, search, edit, history, memories sent with chat, suggestions approved and rejected, purge, projects).
+
+The voice E2E tests (`e2e/voice.spec.ts`) replace the browser's speech API with a scripted fake, because headless Chromium has no microphone or speakers. Everything above that API is the real code: speak a message, hear the reply, stop speaking, Esc cancels, mute, read aloud, hands-free listening, auto-send off, and an unsupported browser.
 
 No suite calls the real Anthropic API, so tests are free and need no key.
 
@@ -248,7 +274,7 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 - [x] **Phase 1: Foundation.** Backend, database schema and migrations, auth, conversations with persistent history, SSE streaming pipeline, settings, backups, polished UI, Tauri shell, tests.
 - [x] **Phase 2: Claude integration.** `ClaudeProvider` (official SDK, streaming), context building and trimming, prompt caching, refusal fallback, friendly error handling, usage and cost tracking, cancellation that stops generation, model/effort/length settings, safe Markdown rendering.
 - [x] **Phase 3: Persistent memory.** Memory CRUD, FTS5 search, relevant-context retrieval, duplicate prevention, history, approval flow (Claude suggestions), projects, Memory UI.
-- [ ] **Phase 4: Voice.** Microphone, speech-to-text, text-to-speech, interruption, mute, voice settings, pluggable `VoiceProvider`.
+- [x] **Phase 4: Voice.** Microphone with live transcript and level meter, speech-to-text, streamed text-to-speech, interruption (barge-in, Esc, stop), mute, hands-free conversation, voice settings, pluggable `VoiceProvider`.
 - [ ] **Phase 5: Tool system.** Registry, schemas, permission engine and approvals, execution log. First tools: calculator, date/time, files, summarizer, web research, memory, task manager, sandboxed Python.
 - [ ] **Phase 6: Browser and desktop automation.** Playwright browsing, approved desktop app control through Tauri commands.
 - [ ] **Phase 7: Autonomous tasks.** Planner, sequential and parallel execution, retries, verification, cancellation, task dashboard.

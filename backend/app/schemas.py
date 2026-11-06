@@ -128,6 +128,11 @@ Effort = Literal["", "low", "medium", "high", "xhigh", "max"]
 _MODEL_PATTERN = r"^$|^[a-z0-9][a-z0-9.\-]{2,99}$"
 
 
+#: Speech engines. Only the browser's Web Speech API exists today; local engines plug in later.
+VoiceProviderId = Literal["browser"]
+_LANG_PATTERN = r"^$|^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$"  # BCP 47 tag, e.g. en-US
+
+
 class UserPreferences(BaseModel):
     """User-adjustable preferences persisted in app_settings. All fields optional on update."""
 
@@ -140,6 +145,10 @@ class UserPreferences(BaseModel):
     speak_responses: bool = False
     voice_name: str = Field(default="", max_length=200)
     speech_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    voice_provider: VoiceProviderId = "browser"
+    voice_language: str = Field(default="", pattern=_LANG_PATTERN)  # "" = browser language
+    voice_auto_send: bool = True  # send a voice message as soon as you stop speaking
+    voice_conversation_mode: bool = False  # listen again after a spoken reply
     send_on_enter: bool = True
 
 
@@ -153,6 +162,10 @@ class UserPreferencesUpdate(BaseModel):
     speak_responses: bool | None = None
     voice_name: str | None = Field(default=None, max_length=200)
     speech_rate: float | None = Field(default=None, ge=0.5, le=2.0)
+    voice_provider: VoiceProviderId | None = None
+    voice_language: str | None = Field(default=None, pattern=_LANG_PATTERN)
+    voice_auto_send: bool | None = None
+    voice_conversation_mode: bool | None = None
     send_on_enter: bool | None = None
 
 

@@ -4,7 +4,7 @@ JARVIS is a personal AI assistant with a web app and a Windows desktop app (Taur
 
 ## Current phase
 
-**Phases 1-3 (Foundation, Claude integration, Persistent memory) are complete. Phase 4 (Voice) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+**Phases 1-4 (Foundation, Claude integration, Persistent memory, Voice) are complete. Phase 5 (Tool system) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
 
 ## Layout
 
@@ -63,8 +63,17 @@ cd frontend && npx vite build && npx playwright test --trace off
 - Memory context is attached to the **user turn** (first text block) and stored in `Message.blocks`, so replays are byte-identical. Don't move it into the system prompt (that would invalidate the cache every turn) and never rewrite stored blocks.
 - Suggestions (`services/memory_suggest.py`) are pending (`approved=False`, `source="assistant"`) and never sent to Claude until approved. Keep the secret filter.
 
-## Phase 4 entry points
+## Voice notes
 
-- Preferences `voice_input_enabled`, `speak_responses`, `voice_name`, `speech_rate` already exist and are editable in Settings.
-- The Composer's mic button is disabled with a Phase 4 note; `VoiceOrb` accepts `state="listening"` and a `level` (0..1) for live mic input.
-- Design a `VoiceProvider` interface (browser Web Speech API first) so local engines can be added later. Speech recognition availability differs between Chrome, Edge and the Tauri WebView2; detect support and show a clear message when unavailable.
+- `frontend/src/voice/`: `types.ts` (the `VoiceProvider` / `SpeechRecognizer` / `SpeechSynthesizer` interfaces), `browser.ts` (Web Speech implementation; WebView2 is reported as unsupported for input), `speechText.ts` (Markdown to speech, `StreamingSpeaker`), `useVoice.ts` (state, mute, barge-in, reply speaker), `micLevel.ts` (optional level meter).
+- UI code must go through `useVoice`/the interfaces, never `window.speechSynthesis` or `SpeechRecognition` directly, so a local engine can be swapped in.
+- Each listening session can be cancelled; a cancelled session must never deliver its transcript. A new message, the mic, Esc and "Stop speaking" all cancel speech.
+- E2E voice tests fake the Web Speech API in the page (`e2e/voice.spec.ts`); the code above it is real.
+- Voice preferences: `voice_input_enabled`, `speak_responses`, `voice_name`, `speech_rate`, `voice_provider` (only `"browser"`), `voice_language` (BCP 47), `voice_auto_send`, `voice_conversation_mode`. Mute is per device (localStorage).
+
+## Phase 5 entry points
+
+- Tables `tool_executions` and `permissions` exist. Build a registry where each tool has a name, description, Pydantic input schema, permission level, handler, error handling and redacted logging (rule 3), and an agent loop with iteration, timeout and token limits (rule 4).
+- On `claude-opus-5-5` and other current models, forced `tool_choice` (`any`/`tool`) returns a 400: use `auto`. Read the claude-api skill's tool-use docs before writing the loop (streaming with tools, `eager_input_streaming`, validating inputs before running).
+- Memory search/creation tools must keep the approval rule: a tool may *suggest* a memory (pending), never approve one.
+- The chat header's "No tools active" indicator and the Tasks roadmap page are placeholders for this phase.

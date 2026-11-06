@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { AlertTriangle, Brain, Check, CircleSlash, Copy, Info } from "lucide-react";
+import { AlertTriangle, Brain, Check, CircleSlash, Copy, Info, Volume2 } from "lucide-react";
 import type { Message } from "../lib/types";
 import { Markdown } from "./Markdown";
 import { clockTime } from "../lib/format";
 
-export function MessageBubble({ message, assistantName }: { message: Message; assistantName: string }) {
+export function MessageBubble({ message, assistantName, onReadAloud }: { message: Message; assistantName: string; onReadAloud?: (text: string) => void }) {
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1 animate-fade-up" data-role="user">
@@ -62,7 +62,16 @@ export function MessageBubble({ message, assistantName }: { message: Message; as
             <AlertTriangle size={13} className="mt-0.5" /> {message.error || "The response failed."}
           </div>
         )}
-        {message.status === "complete" && message.content && <CopyButton text={message.content} />}
+        {message.status === "complete" && message.content && (
+          <div className="mt-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <CopyButton text={message.content} />
+            {onReadAloud && (
+              <button className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-faint hover:text-ink" onClick={() => onReadAloud(message.content)} aria-label="Read aloud">
+                <Volume2 size={12} /> Read aloud
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -76,7 +85,7 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
-      className="mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-ink focus:opacity-100"
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-faint hover:text-ink"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);

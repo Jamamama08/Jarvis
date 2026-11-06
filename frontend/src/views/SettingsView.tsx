@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { Check, DatabaseBackup, Loader2, Menu } from "lucide-react";
+import { Check, DatabaseBackup, Loader2, Menu, Play } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { api } from "../lib/api";
 import { formatBytes, relativeTime } from "../lib/format";
 import type { Backup, Effort, Preferences, SettingsResponse, UsageSummary, User } from "../lib/types";
+import { getVoiceProvider } from "../voice/useVoice";
+import type { VoiceInfo } from "../voice/types";
 
 interface Props {
   user: User;
@@ -29,6 +31,7 @@ export function SettingsView({ user, settings, onSettingsChanged, onOpenSidebar 
             <>
               <ProfileCard user={user} />
               <AssistantCard settings={settings} onSaved={onSettingsChanged} />
+              <VoiceCard settings={settings} onSaved={onSettingsChanged} />
               <UsageCard settings={settings} />
               <SecurityCard />
               <DataCard />
@@ -117,7 +120,8 @@ function AssistantCard({ settings, onSaved }: { settings: SettingsResponse; onSa
   function submit(e: FormEvent) {
     e.preventDefault();
     void s.run(async () => {
-      const preferences = await api.updateSettings(prefs);
+      const { assistant_name, model, effort, max_output_tokens, memory_enabled, send_on_enter } = prefs;
+      const preferences = await api.updateSettings({ assistant_name, model, effort, max_output_tokens, memory_enabled, send_on_enter });
       setPrefs(preferences);
       onSaved({ ...settings, preferences });
     });
@@ -145,17 +149,11 @@ function AssistantCard({ settings, onSaved }: { settings: SettingsResponse; onSa
           </div>
           <div>
             <label className="label" htmlFor="max-tokens">Max output tokens</label>
-            <input id="max-tokens" type="number" min={0} max={64000} className="input" placeholder={String(settings.server.default_max_output_tokens)} value={prefs.max_output_tokens || ""} onChange={(e) => set("max_output_tokens", Number(e.target.value) || 0)} />
-          </div>
-          <div>
-            <label className="label" htmlFor="speech-rate">Speech rate ({prefs.speech_rate.toFixed(1)}×)</label>
-            <input id="speech-rate" type="range" min={0.5} max={2} step={0.1} className="w-full accent-arc" value={prefs.speech_rate} onChange={(e) => set("speech_rate", Number(e.target.value))} />
+            <input id="max-tokens" type="number" min={0} max={128000} className="input" placeholder={String(settings.server.default_max_output_tokens)} value={prefs.max_output_tokens || ""} onChange={(e) => set("max_output_tokens", Number(e.target.value) || 0)} />
           </div>
         </div>
         <Toggle label="Use memories in replies" hint="Send relevant approved memories to Claude with each message." checked={prefs.memory_enabled} onChange={(v) => set("memory_enabled", v)} />
         <Toggle label="Send message with Enter" hint="Otherwise use Ctrl+Enter." checked={prefs.send_on_enter} onChange={(v) => set("send_on_enter", v)} />
-        <Toggle label="Voice input" hint="Microphone input. Active from Phase 4." checked={prefs.voice_input_enabled} onChange={(v) => set("voice_input_enabled", v)} />
-        <Toggle label="Speak responses aloud" hint="Text-to-speech. Active from Phase 4." checked={prefs.speak_responses} onChange={(v) => set("speak_responses", v)} />
         <SaveRow {...s} />
       </form>
     </Card>
@@ -258,6 +256,100 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-[11px] text-ink-faint">{label}</div>
       <div className="mt-0.5 font-mono text-sm text-ink">{value}</div>
     </div>
+  );
+}
+
+const LANGUAGES = ["en-US", "en-GB", "en-AU", "en-IN", "es-ES", "es-MX", "fr-FR", "de-DE", "it-IT", "pt-BR", "nl-NL", "ja-JP", "ko-KR", "zh-CN", "hi-IN", "vi-VN"];
+
+function VoiceCard({ settings, onSaved }: { settings: SettingsResponse; onSaved: (s: SettingsResponse) => void }) {
+  const provider = getVoiceProvider();
+  const [prefs, setPrefs] = useState<Preferences>(settings.preferences);
+  const [voices, setVoices] = useState<VoiceInfo[]>([]);
+  const s = useSaver();
+  const set = <K extends keyof Preferences>(k: K, v: Preferences[K]) => setPrefs((p) => ({ ...p, [k]: v }));
+  const browserLang = typeof navigator !== "undefined" ? navigator.language : "en-US";
+  const lang = prefs.voice_language || browserLang;
+
+  useEffect(() => {
+    void provider.synthesizer.voices().then(setVoices);
+  }, [provider]);
+
+  const base = lang.split("-")[0].toLowerCase();
+  const sorted = [...voices].sort(
+    (a, b) => Number(b.language.toLowerCase().startsWith(base)) - Number(a.language.toLowerCase().startsWith(base)) || a.name.localeCompare(b.name),
+  );
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    void s.run(async () => {
+      const { voice_input_enabled, speak_responses, voice_name, speech_rate, voice_language, voice_auto_send, voice_conversation_mode } = prefs;
+      const preferences = await api.updateSettings({ voice_input_enabled, speak_responses, voice_name, speech_rate, voice_language, voice_auto_send, voice_conversation_mode });
+      setPrefs(preferences);
+      onSaved({ ...settings, preferences });
+    });
+  }
+
+  function testVoice() {
+    provider.synthesizer.cancel();
+    provider.synthesizer.speak(`Good day. I'm ${settings.preferences.assistant_name || "JARVIS"}, and this is how I sound.`, {
+      voiceId: prefs.voice_name || undefined,
+      rate: prefs.speech_rate,
+      language: lang,
+    });
+  }
+
+  const inputReason = provider.recognizer.unsupportedReason;
+  return (
+    <Card title="Voice" description={provider.privacyNote}>
+      <ul className="space-y-1 text-xs" data-testid="voice-support">
+        <li className={inputReason ? "text-warn" : "text-ok"}>
+          {inputReason ? `Voice input: ${inputReason}` : "Voice input: supported in this browser."}
+        </li>
+        <li className={provider.synthesizer.supported ? "text-ok" : "text-warn"}>
+          {provider.synthesizer.supported
+            ? `Spoken replies: supported (${voices.length} voice${voices.length === 1 ? "" : "s"} available).`
+            : "Spoken replies: this browser doesn't support speech synthesis."}
+        </li>
+      </ul>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="label" htmlFor="voice-name">Voice</label>
+            <select id="voice-name" className="input" value={prefs.voice_name} onChange={(e) => set("voice_name", e.target.value)}>
+              <option value="">System default</option>
+              {sorted.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name} ({v.language}){v.local ? "" : " · online"}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="voice-language">Recognition language</label>
+            <select id="voice-language" className="input" value={prefs.voice_language} onChange={(e) => set("voice_language", e.target.value)}>
+              <option value="">Browser default ({browserLang})</option>
+              {LANGUAGES.map((l) => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="speech-rate">Speech rate ({prefs.speech_rate.toFixed(1)}×)</label>
+            <input id="speech-rate" type="range" min={0.5} max={2} step={0.1} className="w-full accent-arc" value={prefs.speech_rate} onChange={(e) => set("speech_rate", Number(e.target.value))} />
+          </div>
+          <div className="flex items-end">
+            <button type="button" className="btn-outline" onClick={testVoice} disabled={!provider.synthesizer.supported}>
+              <Play size={14} /> Test voice
+            </button>
+          </div>
+        </div>
+        <Toggle label="Voice input" hint="Show the microphone button for speaking your messages." checked={prefs.voice_input_enabled} onChange={(v) => set("voice_input_enabled", v)} />
+        <Toggle label="Send voice messages automatically" hint="Send as soon as you stop talking. Off: the words go into the message box for you to edit." checked={prefs.voice_auto_send} onChange={(v) => set("voice_auto_send", v)} />
+        <Toggle label="Speak replies aloud" hint="Read replies out as they arrive. Mute anytime from the chat header; Esc stops speaking." checked={prefs.speak_responses} onChange={(v) => set("speak_responses", v)} />
+        <Toggle label="Hands-free conversation" hint="After a spoken message, listen again once the reply has been read out." checked={prefs.voice_conversation_mode} onChange={(v) => set("voice_conversation_mode", v)} />
+        <SaveRow {...s} />
+      </form>
+    </Card>
   );
 }
 

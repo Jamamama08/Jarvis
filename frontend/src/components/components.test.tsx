@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { useState, type ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { Composer } from "./Composer";
 import { MessageBubble } from "./MessageBubble";
@@ -9,10 +10,15 @@ const base: Message = {
   model: "claude-x", error: null, created_at: "2026-11-06T12:00:00Z", memory_ids: [],
 };
 
+function ComposerHarness(props: Omit<ComponentProps<typeof Composer>, "draft" | "onDraftChange">) {
+  const [draft, setDraft] = useState("");
+  return <Composer {...props} draft={draft} onDraftChange={setDraft} />;
+}
+
 describe("Composer", () => {
   it("sends on Enter, newline on Shift+Enter, and ignores blank input", async () => {
     const onSend = vi.fn();
-    render(<Composer onSend={onSend} onStop={() => {}} streaming={false} sendOnEnter assistantName="JARVIS" />);
+    render(<ComposerHarness onSend={onSend} onStop={() => {}} streaming={false} sendOnEnter assistantName="JARVIS" />);
     const box = screen.getByLabelText("Message");
     await userEvent.type(box, "   {Enter}");
     expect(onSend).not.toHaveBeenCalled();
@@ -24,15 +30,28 @@ describe("Composer", () => {
 
   it("shows a stop button while streaming", async () => {
     const onStop = vi.fn();
-    render(<Composer onSend={() => {}} onStop={onStop} streaming sendOnEnter assistantName="JARVIS" />);
+    render(<ComposerHarness onSend={() => {}} onStop={onStop} streaming sendOnEnter assistantName="JARVIS" />);
     expect(screen.queryByLabelText("Send message")).toBeNull();
     await userEvent.click(screen.getByLabelText("Stop response"));
     expect(onStop).toHaveBeenCalled();
   });
 
-  it("keeps the microphone disabled until voice lands", () => {
-    render(<Composer onSend={() => {}} onStop={() => {}} streaming={false} sendOnEnter assistantName="JARVIS" />);
-    expect(screen.getByLabelText(/Voice input/)).toBeDisabled();
+  it("mic button toggles listening, shows the live transcript and explains when unavailable", async () => {
+    const onToggle = vi.fn();
+    const voice = { available: true, unavailableReason: null, listening: false, transcript: "", onToggle };
+    const { rerender } = render(<ComposerHarness onSend={() => {}} onStop={() => {}} streaming={false} sendOnEnter assistantName="JARVIS" voice={voice} />);
+    await userEvent.click(screen.getByTestId("mic-button"));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    rerender(<ComposerHarness onSend={() => {}} onStop={() => {}} streaming={false} sendOnEnter assistantName="JARVIS" voice={{ ...voice, listening: true, transcript: "open the garage" }} />);
+    expect(screen.getByLabelText("Message")).toHaveValue("open the garage");
+    expect(screen.getByLabelText("Message")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Send message")).toBeDisabled();
+    rerender(<ComposerHarness onSend={() => {}} onStop={() => {}} streaming={false} sendOnEnter assistantName="JARVIS" voice={{ ...voice, available: false, unavailableReason: "No speech here" }} />);
+    const mic = screen.getByTestId("mic-button");
+    expect(mic).toHaveAttribute("aria-disabled", "true");
+    expect(mic).toHaveAttribute("title", "No speech here");
+    await userEvent.click(mic);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });
 
