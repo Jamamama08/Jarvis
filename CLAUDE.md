@@ -4,7 +4,7 @@ JARVIS is a personal AI assistant with a web app and a Windows desktop app (Taur
 
 ## Current phase
 
-**Phase 1 (Foundation) is complete. Phase 2 (Claude integration) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+**Phases 1 (Foundation) and 2 (Claude integration) are complete. Phase 3 (Persistent memory) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
 
 ## Layout
 
@@ -49,8 +49,14 @@ cd frontend && npx vite build && npx playwright test --trace off
 8. Add dependencies only when they're needed. Prefer free and open-source ones. State costs before adding any paid service.
 9. Update README.md (roadmap checkboxes, config table) and this file when a phase completes.
 
-## Phase 2 entry points
+## Claude integration notes
 
-- `backend/app/services/providers.py`: implement `ClaudeProvider` (official `anthropic` SDK, async streaming, `output_role="assistant"`, report usage via `Completed`). Return it from `build_provider` when the API key is set.
-- `backend/app/services/chat.py`: `run_turn` already handles streaming, persistence, cancellation, and errors. Write an `api_usage` row from `Completed`.
-- Frontend: render assistant markdown safely (no raw HTML).
+- `backend/app/services/providers.py`: `ClaudeProvider` uses `anthropic` 2.x (`AsyncAnthropic`, `client.beta.messages.stream`). SDK 2.x runs on `httpx2`, sends the key as `Authorization`, and pins API version `2026-10-21`, which rejects `temperature`/`top_p`/`top_k`: don't send them. Default model `claude-opus-5-5`: thinking can't be disabled on it, so leave `thinking` unset and steer with `output_config.effort`. `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) is only sent for models in `FALLBACK_CAPABLE_MODELS`.
+- `backend/app/services/chat.py`: `run_turn` streams, persists, records `api_usage` (also for cancelled turns: exact input, estimated output), discards refused partial output, and handles the `reset` event when a fallback model takes over mid-stream. Keep the history append-only (never rewrite earlier turns) so prompt caching keeps working.
+- Never call the real API in tests. Use the mocked `httpx2` transport in `tests/test_claude.py` or `frontend/e2e/mock-anthropic.mjs`.
+- Prices in `services/models_catalog.py` are for estimates only; update them when Anthropic's pricing changes.
+
+## Phase 3 entry points
+
+- Tables `memories` (with `content_hash`, `approved`) and `memory_history` already exist. Add an FTS5 virtual table and triggers in a new migration.
+- Inject approved, relevant memories into the request as a separate block after the stable system prompt, so caching of the prefix keeps working.

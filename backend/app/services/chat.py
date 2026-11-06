@@ -4,21 +4,23 @@ output when the client disconnects or cancels).
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import anyio
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.models import Conversation, Message, MessageRole, MessageStatus
+from app.models import ApiUsage, Conversation, Message, MessageRole, MessageStatus, User
 from app.schemas import MessageOut
 from app.services.preferences import load_preferences
-from app.services.providers import ChatProvider, ChatTurn, Completed, TextDelta
+from app.services.prompts import build_system_prompt
+from app.services.providers import ChatProvider, ChatTurn, Completed, ProviderError, Started, TextDelta, TextReset
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +92,55 @@ async def _history(db: AsyncSession, conversation_id: str) -> list[ChatTurn]:
             .order_by(Message.seq)
         )
     ).scalars()
-    return [ChatTurn(role=m.role.value, content=m.content) for m in rows if m.content]
+    return [ChatTurn(role=m.role.value, content=m.content) for m in rows if m.content.strip()]
+
+
+CHARS_PER_TOKEN = 4  # conservative-enough estimate for budgeting; no network call needed
+
+
+def trim_history(turns: list[ChatTurn], max_tokens: int) -> list[ChatTurn]:
+    """Keep the newest turns that fit the token budget; the result always starts with a user turn.
+
+    The latest user turn is always kept, even if it alone exceeds the budget (the API
+    will then report the problem rather than us silently truncating the user's text).
+    """
+    budget = max_tokens * CHARS_PER_TOKEN
+    kept: list[ChatTurn] = []
+    used = 0
+    for turn in reversed(turns):
+        cost = len(turn.content)
+        if kept and used + cost > budget:
+            break
+        kept.append(turn)
+        used += cost
+    kept.reverse()
+    while kept and kept[0].role != "user":
+        kept.pop(0)
+    return kept
+
+
+def _usage_row(completed: Completed | None, started: Started | None, parts: list[str], configured: bool) -> dict | None:
+    """Usage to record for a turn. Billed tokens are recorded even when a reply is cancelled or
+    fails mid-stream: input tokens are exact (from message_start); output is then estimated."""
+    if not configured:
+        return None
+    if completed and (completed.input_tokens or completed.output_tokens):
+        return {
+            "model": completed.model or (started.model if started else "unknown"),
+            "input_tokens": completed.input_tokens,
+            "output_tokens": completed.output_tokens,
+            "cache_read_tokens": completed.cache_read_tokens,
+            "cache_write_tokens": completed.cache_write_tokens,
+        }
+    if started:
+        return {
+            "model": started.model,
+            "input_tokens": started.input_tokens,
+            "output_tokens": -(-sum(len(p) for p in parts) // CHARS_PER_TOKEN),  # ceil estimate
+            "cache_read_tokens": started.cache_read_tokens,
+            "cache_write_tokens": started.cache_write_tokens,
+        }
+    return None
 
 
 async def run_turn(
@@ -108,6 +158,7 @@ async def run_turn(
     try:
         async with sessionmaker() as db:
             conversation = await db.get(Conversation, conversation_id)
+            user = await db.get(User, user_id)
             prefs = await load_preferences(db, user_id)
             model = prefs.model or settings.default_model
             max_tokens = prefs.max_output_tokens or settings.max_output_tokens
@@ -140,34 +191,65 @@ async def run_turn(
             final_status = MessageStatus.complete
             error: str | None = None
             completed: Completed | None = None
+            started: Started | None = None
             try:
-                system = f"You are {prefs.assistant_name}, a personal AI assistant."
-                async for event in provider.stream(history, model=model, max_tokens=max_tokens, system=system):
-                    if cancel_event.is_set():
-                        final_status = MessageStatus.cancelled
-                        break
-                    if isinstance(event, TextDelta):
-                        parts.append(event.text)
-                        yield sse("delta", {"text": event.text})
-                    elif isinstance(event, Completed):
-                        completed = event
+                system = build_system_prompt(prefs, user.display_name or user.username, date.today())
+                events = provider.stream(
+                    trim_history(history, settings.max_context_tokens),
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    effort=prefs.effort or None,
+                )
+                # aclosing() closes the upstream HTTP stream immediately on cancel, so no more tokens are billed.
+                async with contextlib.aclosing(events):
+                    async for event in events:
+                        if cancel_event.is_set():
+                            final_status = MessageStatus.cancelled
+                            break
+                        if isinstance(event, TextDelta):
+                            parts.append(event.text)
+                            yield sse("delta", {"text": event.text})
+                        elif isinstance(event, TextReset):
+                            parts.clear()
+                            yield sse("reset", {})
+                        elif isinstance(event, Started):
+                            started = event
+                        elif isinstance(event, Completed):
+                            completed = event
             except (asyncio.CancelledError, anyio.get_cancelled_exc_class()):
                 final_status = MessageStatus.cancelled
                 raise
-            except Exception as exc:  # provider failure: persist and report, don't crash the stream
+            except ProviderError as exc:
+                final_status = MessageStatus.error
+                error = exc.user_message
+            except Exception:  # unexpected failure: log it, persist a generic error, keep the stream alive
                 log.exception("Provider error in conversation %s", conversation_id)
                 final_status = MessageStatus.error
-                error = f"{type(exc).__name__}: {exc}"
+                error = "Unexpected error while generating the response."
             finally:
                 # Shield persistence from client-disconnect cancellation.
                 with anyio.CancelScope(shield=True):
                     reply.content = "".join(parts)
-                    reply.status = final_status
-                    reply.error = error
                     if completed:
+                        if completed.model:
+                            reply.model = completed.model
+                        if completed.stop_reason == "refusal":
+                            # Partial output from a declined request must not be kept or replayed.
+                            final_status = MessageStatus.error
+                            reply.content = ""
+                            category = f" (category: {completed.refusal_category})" if completed.refusal_category else ""
+                            error = f"Claude declined to respond to this request{category}."
+                        elif completed.stop_reason == "max_tokens":
+                            error = "Reached the maximum output length, so this response may be cut off."
                         reply.input_tokens = completed.input_tokens or None
                         reply.output_tokens = completed.output_tokens or None
+                    reply.status = final_status
+                    reply.error = error
                     conversation.updated_at = datetime.now(UTC)
+                    usage = _usage_row(completed, started, parts, provider.configured)
+                    if usage:
+                        db.add(ApiUsage(user_id=user_id, conversation_id=conversation_id, message_id=reply.id, **usage))
                     await db.commit()
 
             yield sse("reply_done", MessageOut.model_validate(reply).model_dump(mode="json"))

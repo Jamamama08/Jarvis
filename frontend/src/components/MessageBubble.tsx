@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AlertTriangle, Check, CircleSlash, Copy, Info } from "lucide-react";
 import type { Message } from "../lib/types";
+import { Markdown } from "./Markdown";
 import { clockTime } from "../lib/format";
 
 export function MessageBubble({ message, assistantName }: { message: Message; assistantName: string }) {
@@ -37,10 +38,15 @@ export function MessageBubble({ message, assistantName }: { message: Message; as
           <span>{clockTime(message.created_at)}</span>
           {message.model && <span className="font-mono text-[10px]">{message.model}</span>}
         </div>
-        <div className="text-[15px] leading-relaxed whitespace-pre-wrap break-words text-ink">
-          {message.content}
+        <div className="text-ink" data-testid="assistant-content">
+          {message.content ? <Markdown text={message.content} /> : null}
           {message.status === "streaming" && <Caret />}
         </div>
+        {message.status === "complete" && message.error && (
+          <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
+            <AlertTriangle size={13} className="mt-0.5" /> {message.error}
+          </div>
+        )}
         {message.status === "cancelled" && (
           <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-ink-faint">
             <CircleSlash size={12} /> Response stopped

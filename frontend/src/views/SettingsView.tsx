@@ -3,7 +3,7 @@ import { Check, DatabaseBackup, Loader2, Menu } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { api } from "../lib/api";
 import { formatBytes, relativeTime } from "../lib/format";
-import type { Backup, Preferences, SettingsResponse, User } from "../lib/types";
+import type { Backup, Effort, Preferences, SettingsResponse, UsageSummary, User } from "../lib/types";
 
 interface Props {
   user: User;
@@ -29,6 +29,7 @@ export function SettingsView({ user, settings, onSettingsChanged, onOpenSidebar 
             <>
               <ProfileCard user={user} />
               <AssistantCard settings={settings} onSaved={onSettingsChanged} />
+              <UsageCard settings={settings} />
               <SecurityCard />
               <DataCard />
               <AboutCard settings={settings} />
@@ -123,16 +124,24 @@ function AssistantCard({ settings, onSaved }: { settings: SettingsResponse; onSa
   }
 
   return (
-    <Card title="Assistant" description="Model and conversation behaviour. Empty values use the server defaults.">
+    <Card title="Assistant" description="Model and response behaviour. Empty values use the server defaults. Higher effort and larger models cost more per message.">
       <form onSubmit={submit} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="label" htmlFor="assistant-name">Assistant name</label>
             <input id="assistant-name" className="input" value={prefs.assistant_name} onChange={(e) => set("assistant_name", e.target.value)} maxLength={40} required />
           </div>
+          <ModelPicker settings={settings} value={prefs.model} onChange={(v) => set("model", v)} />
           <div>
-            <label className="label" htmlFor="model">Claude model</label>
-            <input id="model" className="input font-mono" placeholder={settings.server.default_model} value={prefs.model} onChange={(e) => set("model", e.target.value.trim())} />
+            <label className="label" htmlFor="effort">Effort</label>
+            <select id="effort" className="input" value={prefs.effort} onChange={(e) => set("effort", e.target.value as Effort)}>
+              <option value="">Model default</option>
+              <option value="low">Low: fastest, cheapest</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+              <option value="max">Max: most thorough, most tokens</option>
+            </select>
           </div>
           <div>
             <label className="label" htmlFor="max-tokens">Max output tokens</label>
@@ -149,6 +158,105 @@ function AssistantCard({ settings, onSaved }: { settings: SettingsResponse; onSa
         <SaveRow {...s} />
       </form>
     </Card>
+  );
+}
+
+const CUSTOM = "__custom__";
+
+function ModelPicker({ settings, value, onChange }: { settings: SettingsResponse; value: string; onChange: (v: string) => void }) {
+  const { models, default_model } = settings.server;
+  const known = value === "" || models.some((m) => m.id === value);
+  const [custom, setCustom] = useState(!known);
+  const defaultLabel = models.find((m) => m.id === default_model)?.label ?? default_model;
+  return (
+    <div>
+      <label className="label" htmlFor="model">Claude model</label>
+      <select
+        id="model"
+        className="input"
+        value={custom ? CUSTOM : value}
+        onChange={(e) => {
+          if (e.target.value === CUSTOM) setCustom(true);
+          else {
+            setCustom(false);
+            onChange(e.target.value);
+          }
+        }}
+      >
+        <option value="">Server default ({defaultLabel})</option>
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label} · ${m.input_per_mtok} / ${m.output_per_mtok} per M tokens
+          </option>
+        ))}
+        <option value={CUSTOM}>Other model ID…</option>
+      </select>
+      {custom && (
+        <input aria-label="Custom model ID" className="input mt-2 font-mono" placeholder="claude-…" value={value} onChange={(e) => onChange(e.target.value.trim())} />
+      )}
+    </div>
+  );
+}
+
+function UsageCard({ settings }: { settings: SettingsResponse }) {
+  const [days, setDays] = useState(30);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.usage(days).then(setUsage).catch((e) => setError((e as Error).message));
+  }, [days]);
+  const t = usage?.totals;
+  const fmt = (n: number) => n.toLocaleString();
+  const cost = (c: number | null) => (c === null ? "n/a" : c > 0 && c < 0.01 ? "< $0.01" : "$" + c.toFixed(2));
+  return (
+    <Card
+      title="API usage"
+      description={
+        settings.server.ai_configured
+          ? "Tokens used by your Claude requests. Costs are estimates from list prices; your Anthropic invoice is authoritative."
+          : "Usage appears here once Claude is connected."
+      }
+    >
+      <div className="flex items-center gap-2">
+        {[7, 30, 365].map((d) => (
+          <button key={d} type="button" onClick={() => setDays(d)} className={"rounded-md px-2.5 py-1 text-xs " + (d === days ? "bg-raised text-ink" : "text-ink-faint hover:text-ink")}>
+            {d === 365 ? "1 year" : d + " days"}
+          </button>
+        ))}
+      </div>
+      {error && <p role="alert" className="text-xs text-danger">{error}</p>}
+      {t && usage && (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="usage-totals">
+            <Stat label="Requests" value={fmt(t.requests)} />
+            <Stat label="Input tokens" value={fmt(t.input_tokens + t.cache_read_tokens + t.cache_write_tokens)} />
+            <Stat label="Output tokens" value={fmt(t.output_tokens)} />
+            <Stat label="Est. cost" value={cost(t.estimated_cost_usd)} />
+          </div>
+          {usage.by_model.length > 0 && (
+            <ul className="divide-y divide-line rounded-lg border border-line text-xs">
+              {usage.by_model.map((r) => (
+                <li key={r.model} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <span className="font-mono text-ink-dim">{r.model}</span>
+                  <span className="text-ink-faint">
+                    {fmt(r.requests)} req · {fmt(r.cache_read_tokens)} cached tokens · {cost(r.estimated_cost_usd)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-base px-3 py-2">
+      <div className="text-[11px] text-ink-faint">{label}</div>
+      <div className="mt-0.5 font-mono text-sm text-ink">{value}</div>
+    </div>
   );
 }
 
@@ -242,8 +350,9 @@ function AboutCard({ settings }: { settings: SettingsResponse }) {
   const rows: [string, string][] = [
     ["Version", server.version],
     ["Build phase", `Phase ${server.phase} of 8`],
-    ["AI provider", server.ai_configured ? "Claude (connected)" : "Not connected — Phase 2"],
+    ["AI provider", server.ai_configured ? "Claude (connected)" : "Not connected: set ANTHROPIC_API_KEY"],
     ["Default model", server.default_model],
+    ["Refusal fallback", server.refusal_fallback ? "On (Anthropic's recommended fallback model)" : "Off"],
   ];
   return (
     <Card title="About">

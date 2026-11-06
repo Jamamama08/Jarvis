@@ -47,11 +47,18 @@ class Settings(BaseSettings):
     # Required for first-run account setup when the server binds to a non-loopback address.
     setup_token: SecretStr | None = None
 
-    # --- AI (used from Phase 2) ----------------------------------------------
+    # --- AI (Claude) -------------------------------------------------------------
     # Read without the JARVIS_ prefix so the standard variable name works.
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
-    default_model: str = "claude-sonnet-5-5"
-    max_output_tokens: int = 4096
+    default_model: str = "claude-opus-5-5"
+    max_output_tokens: int = Field(default=16000, ge=256, le=128_000)
+    # Approximate history budget sent to Claude per turn (oldest turns are dropped first).
+    max_context_tokens: int = Field(default=150_000, ge=2_000)
+    request_timeout_seconds: float = Field(default=300.0, gt=0)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    # Server-side refusal fallback: if Claude's safety classifiers decline a request,
+    # the API retries it on Anthropic's recommended fallback model.
+    refusal_fallback: bool = True
 
     @property
     def resolved_database_url(self) -> str:

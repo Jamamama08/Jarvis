@@ -53,11 +53,38 @@ export interface Preferences {
   assistant_name: string;
   model: string;
   max_output_tokens: number;
+  effort: Effort;
   voice_input_enabled: boolean;
   speak_responses: boolean;
   voice_name: string;
   speech_rate: number;
   send_on_enter: boolean;
+}
+
+export type Effort = "" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  description: string;
+  input_per_mtok: number;
+  output_per_mtok: number;
+}
+
+export interface UsageRow {
+  model: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  estimated_cost_usd: number | null;
+}
+
+export interface UsageSummary {
+  days: number;
+  totals: UsageRow;
+  by_model: UsageRow[];
 }
 
 export interface ServerInfo {
@@ -67,6 +94,8 @@ export interface ServerInfo {
   ai_configured: boolean;
   default_model: string;
   default_max_output_tokens: number;
+  refusal_fallback: boolean;
+  models: ModelOption[];
 }
 
 export interface SettingsResponse {
@@ -85,4 +114,5 @@ export type StreamEvent =
   | { event: "conversation"; data: { id: string; title: string } }
   | { event: "reply_start"; data: Message }
   | { event: "delta"; data: { text: string } }
+  | { event: "reset"; data: Record<string, never> }
   | { event: "reply_done"; data: Message };

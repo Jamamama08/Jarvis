@@ -8,6 +8,7 @@ import type {
   Preferences,
   SettingsResponse,
   StreamEvent,
+  UsageSummary,
   User,
 } from "./types";
 
@@ -133,6 +134,7 @@ export const api = {
 
   getSettings: () => request<SettingsResponse>("/api/settings"),
   updateSettings: (body: Partial<Preferences>) => request<Preferences>("/api/settings", json("PATCH", body)),
+  usage: (days = 30) => request<UsageSummary>(`/api/usage?days=${days}`),
   listBackups: () => request<Backup[]>("/api/system/backups"),
   createBackup: () => request<Backup>("/api/system/backups", json("POST")),
 };

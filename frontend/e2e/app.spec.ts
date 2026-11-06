@@ -33,7 +33,7 @@ test.describe.serial("JARVIS phase 1", () => {
 
     const list = page.getByTestId("message-list");
     await expect(list.locator('[data-role="user"]')).toHaveText("Schedule a suit diagnostic for Friday");
-    await expect(list.locator('[data-role="system"]')).toContainText("Claude is not connected yet");
+    await expect(list.locator('[data-role="system"]')).toContainText("Claude is not connected");
     await expect(page).toHaveURL(/\/c\/[0-9a-f]{32}$/);
     await expect(page.getByTestId("conversation-title")).toHaveText("Schedule a suit diagnostic for Friday");
     const sidebar = page.getByRole("navigation", { name: "Conversations" });

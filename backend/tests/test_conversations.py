@@ -97,7 +97,7 @@ async def test_cancel_marks_reply_cancelled(app, auth_client):
         output_role = "assistant"
         configured = True
 
-        async def stream(self, history, *, model, max_tokens, system):
+        async def stream(self, history, *, model, max_tokens, system, effort=None):
             yield TextDelta("partial")
             started.set()
             for _ in range(200):
@@ -113,8 +113,8 @@ async def test_cancel_marks_reply_cancelled(app, auth_client):
         r = await auth_client.post(f"/api/conversations/{cid}/cancel")
         assert r.json() == {"cancelled": True}
 
-    canceller = asyncio.create_task(cancel_soon())
-    r = await auth_client.post(f"/api/conversations/{cid}/messages", json={"content": "go"})
+    canceller = asyncio.create_task(asyncio.wait_for(cancel_soon(), 10))
+    r = await asyncio.wait_for(auth_client.post(f"/api/conversations/{cid}/messages", json={"content": "go"}), 10)
     await canceller
     done = parse_sse(r.text)[-1][1]
     assert done["status"] == "cancelled" and done["content"].startswith("partial")
@@ -131,7 +131,7 @@ async def test_provider_error_is_persisted(app, auth_client):
         output_role = "assistant"
         configured = True
 
-        async def stream(self, history, *, model, max_tokens, system):
+        async def stream(self, history, *, model, max_tokens, system, effort=None):
             raise RuntimeError("upstream exploded")
             yield  # pragma: no cover
 
@@ -139,7 +139,9 @@ async def test_provider_error_is_persisted(app, auth_client):
     cid = (await auth_client.post("/api/conversations", json={})).json()["id"]
     r = await auth_client.post(f"/api/conversations/{cid}/messages", json={"content": "hi"})
     done = parse_sse(r.text)[-1][1]
-    assert done["status"] == "error" and "upstream exploded" in done["error"]
+    # Internal exception details are logged, not shown to the user.
+    assert done["status"] == "error" and done["error"] == "Unexpected error while generating the response."
+    assert "exploded" not in r.text
 
 
 def test_title_from():

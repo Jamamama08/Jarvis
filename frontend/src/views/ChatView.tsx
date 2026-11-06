@@ -122,6 +122,14 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
             case "reply_start":
               setMessages((m) => [...m, ev.data]);
               break;
+            case "reset":
+              // A fallback model took over mid-stream; drop the declined partial text.
+              setMessages((m) => {
+                const last = m[m.length - 1];
+                if (!last || last.status !== "streaming") return m;
+                return [...m.slice(0, -1), { ...last, content: "" }];
+              });
+              break;
             case "delta":
               setMessages((m) => {
                 const last = m[m.length - 1];
@@ -200,7 +208,7 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
             <p className="mt-2 max-w-md text-sm text-ink-dim">
               {aiConfigured
                 ? `${assistantName} is online. How can I help?`
-                : "Conversations are saved locally. Claude replies are enabled in Phase 2."}
+                : "Claude isn't connected. Add ANTHROPIC_API_KEY to your .env file and restart the backend."}
             </p>
             <div className="mt-8 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
               {SUGGESTIONS.map((s) => (

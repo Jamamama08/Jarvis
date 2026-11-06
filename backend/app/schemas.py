@@ -123,12 +123,17 @@ class MessageCreate(BaseModel):
 # --- Settings -----------------------------------------------------------------
 
 
+Effort = Literal["", "low", "medium", "high", "xhigh", "max"]
+_MODEL_PATTERN = r"^$|^[a-z0-9][a-z0-9.\-]{2,99}$"
+
+
 class UserPreferences(BaseModel):
     """User-adjustable preferences persisted in app_settings. All fields optional on update."""
 
     assistant_name: str = Field(default="JARVIS", min_length=1, max_length=40)
-    model: str = Field(default="", max_length=100)  # "" = server default
-    max_output_tokens: int = Field(default=0, ge=0, le=64_000)  # 0 = server default
+    model: str = Field(default="", max_length=100, pattern=_MODEL_PATTERN)  # "" = server default
+    max_output_tokens: int = Field(default=0, ge=0, le=128_000)  # 0 = server default
+    effort: Effort = ""  # "" = the model's default effort
     voice_input_enabled: bool = True
     speak_responses: bool = False
     voice_name: str = Field(default="", max_length=200)
@@ -138,8 +143,9 @@ class UserPreferences(BaseModel):
 
 class UserPreferencesUpdate(BaseModel):
     assistant_name: str | None = Field(default=None, min_length=1, max_length=40)
-    model: str | None = Field(default=None, max_length=100)
-    max_output_tokens: int | None = Field(default=None, ge=0, le=64_000)
+    model: str | None = Field(default=None, max_length=100, pattern=_MODEL_PATTERN)
+    max_output_tokens: int | None = Field(default=None, ge=0, le=128_000)
+    effort: Effort | None = None
     voice_input_enabled: bool | None = None
     speak_responses: bool | None = None
     voice_name: str | None = Field(default=None, max_length=200)
@@ -152,6 +158,14 @@ class SettingsOut(BaseModel):
     server: "ServerInfo"
 
 
+class ModelOption(BaseModel):
+    id: str
+    label: str
+    description: str
+    input_per_mtok: float
+    output_per_mtok: float
+
+
 class ServerInfo(BaseModel):
     version: str
     phase: int
@@ -159,6 +173,8 @@ class ServerInfo(BaseModel):
     ai_configured: bool
     default_model: str
     default_max_output_tokens: int
+    refusal_fallback: bool
+    models: list[ModelOption]
 
 
 SettingsOut.model_rebuild()
@@ -168,3 +184,19 @@ class BackupOut(BaseModel):
     filename: str
     size_bytes: int
     created_at: datetime
+
+
+class UsageRow(BaseModel):
+    model: str
+    requests: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    estimated_cost_usd: float | None
+
+
+class UsageSummary(BaseModel):
+    days: int
+    totals: UsageRow
+    by_model: list[UsageRow]

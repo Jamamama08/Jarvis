@@ -14,13 +14,16 @@ async def test_settings_defaults_and_update(auth_client):
     assert r.status_code == 200
     body = r.json()
     assert body["preferences"]["assistant_name"] == "JARVIS"
-    assert body["server"]["ai_configured"] is False and body["server"]["phase"] == 1
+    assert body["server"]["ai_configured"] is False and body["server"]["phase"] == 2
+    assert body["server"]["models"][0]["id"] == "claude-opus-5-5"
     assert "api_key" not in r.text.lower()
 
     r = await auth_client.patch("/api/settings", json={"assistant_name": "Friday", "speech_rate": 1.5})
     assert r.status_code == 200 and r.json()["assistant_name"] == "Friday"
     r = await auth_client.patch("/api/settings", json={"speech_rate": 9})
     assert r.status_code == 422
+    for bad in ({"effort": "extreme"}, {"model": "Bad Model!"}, {"max_output_tokens": 999_999}):
+        assert (await auth_client.patch("/api/settings", json=bad)).status_code == 422, bad
     assert (await auth_client.get("/api/settings")).json()["preferences"]["speech_rate"] == 1.5
 
 
