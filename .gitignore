@@ -1,0 +1,29 @@
+# Secrets & local data
+.env
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# Rust / Tauri
+frontend/src-tauri/target/
+frontend/src-tauri/gen/schemas/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
