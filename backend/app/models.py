@@ -193,14 +193,24 @@ class Message(Base):
         _enum(MessageStatus), nullable=False, default=MessageStatus.complete
     )
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    # Structured content blocks (tool_use / tool_result) once tool use lands.
-    blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Extra structured data. For user messages: {"memory_context": str, "memory_ids": [...]},
+    # the memory context sent with this turn (stored so replayed history stays identical).
+    blocks: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow, nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+    @property
+    def memory_ids(self) -> list[str]:
+        """IDs of approved memories attached to this (user) message as context."""
+        if isinstance(self.blocks, dict):
+            ids = self.blocks.get("memory_ids")
+            if isinstance(ids, list):
+                return [str(i) for i in ids]
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +245,9 @@ class Memory(TimestampMixin, Base):
     )
     approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     importance: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    # "user" = written by the user; "assistant" = suggested by Claude (pending until approved).
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="user", server_default="user")
+    last_used_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
 
 
 class MemoryHistory(Base):

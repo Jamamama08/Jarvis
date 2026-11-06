@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Check, CircleSlash, Copy, Info } from "lucide-react";
+import { AlertTriangle, Brain, Check, CircleSlash, Copy, Info } from "lucide-react";
 import type { Message } from "../lib/types";
 import { Markdown } from "./Markdown";
 import { clockTime } from "../lib/format";
@@ -7,10 +7,15 @@ import { clockTime } from "../lib/format";
 export function MessageBubble({ message, assistantName }: { message: Message; assistantName: string }) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end animate-fade-up" data-role="user">
+      <div className="flex flex-col items-end gap-1 animate-fade-up" data-role="user">
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap break-words text-ink">
           {message.content}
         </div>
+        {message.memory_ids.length > 0 && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-ink-faint" data-testid="memories-used" title="Saved memories sent to Claude with this message">
+            <Brain size={11} className="text-arc" /> {message.memory_ids.length} {message.memory_ids.length === 1 ? "memory" : "memories"} used
+          </span>
+        )}
       </div>
     );
   }

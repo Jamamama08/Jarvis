@@ -4,7 +4,7 @@ JARVIS is a personal AI assistant with a web app and a Windows desktop app (Taur
 
 ## Current phase
 
-**Phases 1 (Foundation) and 2 (Claude integration) are complete. Phase 3 (Persistent memory) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+**Phases 1-3 (Foundation, Claude integration, Persistent memory) are complete. Phase 4 (Voice) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
 
 ## Layout
 
@@ -56,7 +56,15 @@ cd frontend && npx vite build && npx playwright test --trace off
 - Never call the real API in tests. Use the mocked `httpx2` transport in `tests/test_claude.py` or `frontend/e2e/mock-anthropic.mjs`.
 - Prices in `services/models_catalog.py` are for estimates only; update them when Anthropic's pricing changes.
 
-## Phase 3 entry points
+## Memory notes
 
-- Tables `memories` (with `content_hash`, `approved`) and `memory_history` already exist. Add an FTS5 virtual table and triggers in a new migration.
-- Inject approved, relevant memories into the request as a separate block after the stable system prompt, so caching of the prefix keeps working.
+- `services/memory.py` holds all memory rules: normalisation + `content_hash`, near-duplicate check (Jaccard >= 0.8 over FTS candidates), FTS queries built only from quoted tokens (`fts_query`), history on every change, retrieval for chat (`build_memory_context`).
+- `memories_fts` is an FTS5 external-content table kept in sync by triggers (migration 0002). Alembic ignores it via `include_name` in `app/migrations.py`; any new raw-SQL objects need the same treatment, or the drift test fails.
+- Memory context is attached to the **user turn** (first text block) and stored in `Message.blocks`, so replays are byte-identical. Don't move it into the system prompt (that would invalidate the cache every turn) and never rewrite stored blocks.
+- Suggestions (`services/memory_suggest.py`) are pending (`approved=False`, `source="assistant"`) and never sent to Claude until approved. Keep the secret filter.
+
+## Phase 4 entry points
+
+- Preferences `voice_input_enabled`, `speak_responses`, `voice_name`, `speech_rate` already exist and are editable in Settings.
+- The Composer's mic button is disabled with a Phase 4 note; `VoiceOrb` accepts `state="listening"` and a `level` (0..1) for live mic input.
+- Design a `VoiceProvider` interface (browser Web Speech API first) so local engines can be added later. Speech recognition availability differs between Chrome, Edge and the Tauri WebView2; detect support and show a clear message when unavailable.

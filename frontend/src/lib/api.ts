@@ -5,6 +5,11 @@ import type {
   ConversationDetail,
   ConversationSummary,
   LoginResponse,
+  Memory,
+  MemoryHistoryEntry,
+  MemoryInput,
+  MemoryList,
+  Project,
   Preferences,
   SettingsResponse,
   StreamEvent,
@@ -134,6 +139,26 @@ export const api = {
 
   getSettings: () => request<SettingsResponse>("/api/settings"),
   updateSettings: (body: Partial<Preferences>) => request<Preferences>("/api/settings", json("PATCH", body)),
+  listMemories: (params: { q?: string; category?: string; state?: "approved" | "pending" | "all"; project_id?: string }) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]);
+    return request<MemoryList>(`/api/memories?${qs}`);
+  },
+  createMemory: (body: MemoryInput) => request<Memory>("/api/memories", json("POST", body)),
+  updateMemory: (id: string, body: Partial<MemoryInput>) => request<Memory>(`/api/memories/${id}`, json("PATCH", body)),
+  approveMemory: (id: string) => request<Memory>(`/api/memories/${id}/approve`, json("POST")),
+  rejectMemory: (id: string) => request<void>(`/api/memories/${id}/reject`, json("POST")),
+  deleteMemory: (id: string, purgeHistory = false) =>
+    request<void>(`/api/memories/${id}${purgeHistory ? "?purge_history=true" : ""}`, json("DELETE")),
+  memoryHistory: (id: string) => request<MemoryHistoryEntry[]>(`/api/memories/${id}/history`),
+  recentMemoryHistory: () => request<MemoryHistoryEntry[]>("/api/memories/history"),
+  suggestMemories: (conversationId: string) =>
+    request<{ created: Memory[]; skipped_duplicates: number }>(`/api/conversations/${conversationId}/suggest-memories`, json("POST")),
+  listProjects: () => request<Project[]>("/api/projects"),
+  createProject: (body: { name: string; description?: string }) => request<Project>("/api/projects", json("POST", body)),
+  updateProject: (id: string, body: Partial<Pick<Project, "name" | "description" | "status" | "progress_notes">>) =>
+    request<Project>(`/api/projects/${id}`, json("PATCH", body)),
+  deleteProject: (id: string) => request<void>(`/api/projects/${id}`, json("DELETE")),
+
   usage: (days = 30) => request<UsageSummary>(`/api/usage?days=${days}`),
   listBackups: () => request<Backup[]>("/api/system/backups"),
   createBackup: () => request<Backup>("/api/system/backups", json("POST")),

@@ -152,6 +152,7 @@ function AssistantCard({ settings, onSaved }: { settings: SettingsResponse; onSa
             <input id="speech-rate" type="range" min={0.5} max={2} step={0.1} className="w-full accent-arc" value={prefs.speech_rate} onChange={(e) => set("speech_rate", Number(e.target.value))} />
           </div>
         </div>
+        <Toggle label="Use memories in replies" hint="Send relevant approved memories to Claude with each message." checked={prefs.memory_enabled} onChange={(v) => set("memory_enabled", v)} />
         <Toggle label="Send message with Enter" hint="Otherwise use Ctrl+Enter." checked={prefs.send_on_enter} onChange={(v) => set("send_on_enter", v)} />
         <Toggle label="Voice input" hint="Microphone input. Active from Phase 4." checked={prefs.voice_input_enabled} onChange={(v) => set("voice_input_enabled", v)} />
         <Toggle label="Speak responses aloud" hint="Text-to-speech. Active from Phase 4." checked={prefs.speak_responses} onChange={(v) => set("speak_responses", v)} />

@@ -12,7 +12,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app import __version__
-from app.api import auth, conversations, system
+from app.api import auth, conversations, memories, system
 from app.core.config import Settings, get_settings
 from app.core.db import Database
 from app.core.logging import configure_logging
@@ -63,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(auth.router)
     app.include_router(conversations.router)
+    app.include_router(memories.router)
 
     _mount_frontend(app, settings.frontend_dist)
     return app

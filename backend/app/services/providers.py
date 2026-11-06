@@ -6,6 +6,7 @@ replies from the Anthropic Messages API with the official SDK.
 system notice instead of an AI reply.
 """
 
+import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -22,6 +23,17 @@ log = logging.getLogger(__name__)
 class ChatTurn:
     role: Literal["user", "assistant"]
     content: str
+    #: Memory context attached to a user turn (sent as a separate block before the text).
+    context: str | None = None
+    memory_ids: tuple[str, ...] = ()
+
+    def to_param(self) -> dict:
+        if self.context:
+            return {
+                "role": self.role,
+                "content": [{"type": "text", "text": self.context}, {"type": "text", "text": self.content}],
+            }
+        return {"role": self.role, "content": self.content}
 
 
 @dataclass(slots=True)
@@ -61,9 +73,10 @@ ProviderEvent = Started | TextDelta | TextReset | Completed
 class ProviderError(Exception):
     """A provider failure with a message that is safe to show the user."""
 
-    def __init__(self, user_message: str):
+    def __init__(self, user_message: str, *, usage: "Completed | None" = None):
         super().__init__(user_message)
         self.user_message = user_message
+        self.usage = usage  # tokens billed before the failure, if any
 
 
 class ChatProvider(Protocol):
@@ -177,7 +190,7 @@ class ClaudeProvider:
             "model": model,
             "max_tokens": max_tokens,
             "system": system,
-            "messages": [{"role": t.role, "content": t.content} for t in history],
+            "messages": [t.to_param() for t in history],
             # Automatic prompt caching: the conversation prefix is re-read at ~10% of the input price.
             "cache_control": {"type": "ephemeral"},
         }
@@ -227,6 +240,48 @@ class ClaudeProvider:
             cache_write_tokens=usage.cache_creation_input_tokens or 0,
             refusal_category=getattr(details, "category", None) if final.stop_reason == "refusal" else None,
         )
+
+
+@dataclass(slots=True)
+class JsonResult:
+    data: dict
+    usage: Completed
+
+
+async def complete_json(
+    provider: "ClaudeProvider", *, model: str, system: str, prompt: str, schema: dict, max_tokens: int = 4000
+) -> JsonResult:
+    """One non-streaming request constrained to a JSON schema (structured outputs)."""
+    request = provider.build_request(
+        [ChatTurn("user", prompt)], model=model, max_tokens=max_tokens, system=system, effort=None
+    )
+    request.pop("cache_control", None)  # one-off request: nothing to reuse
+    request["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
+    try:
+        response = await provider.client.beta.messages.create(**request)
+    except anthropic.AnthropicError as exc:
+        log.warning("Claude JSON request failed: %s", type(exc).__name__)
+        raise ProviderError(_error_message(exc)) from exc
+    usage = Completed(
+        stop_reason=response.stop_reason or "end_turn",
+        model=response.model,
+        input_tokens=response.usage.input_tokens or 0,
+        output_tokens=response.usage.output_tokens or 0,
+        cache_read_tokens=response.usage.cache_read_input_tokens or 0,
+        cache_write_tokens=response.usage.cache_creation_input_tokens or 0,
+    )
+    if response.stop_reason == "refusal":
+        raise ProviderError("Claude declined this request.", usage=usage)
+    if response.stop_reason == "max_tokens":
+        raise ProviderError("Claude's answer was cut off before it finished. Try again.", usage=usage)
+    text_ = "".join(b.text for b in response.content if b.type == "text")
+    try:
+        data = json.loads(text_)
+    except json.JSONDecodeError as exc:
+        raise ProviderError("Claude returned an unreadable answer. Try again.", usage=usage) from exc
+    if not isinstance(data, dict):
+        raise ProviderError("Claude returned an unexpected answer. Try again.", usage=usage)
+    return JsonResult(data=data, usage=usage)
 
 
 def build_provider(settings: Settings) -> ChatProvider:

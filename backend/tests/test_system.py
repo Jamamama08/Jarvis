@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 
 from app.core.db import Base
 from app.core.logging import redact
-from app.migrations import sync_url
+from app.migrations import include_name, sync_url
 
 
 async def test_settings_defaults_and_update(auth_client):
@@ -66,7 +66,8 @@ async def test_backup(auth_client, settings):
 async def test_migrations_match_models(app, settings):
     engine = create_engine(sync_url(settings.resolved_database_url))
     with engine.connect() as conn:
-        diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+        ctx = MigrationContext.configure(conn, opts={"include_name": include_name})
+        diff = compare_metadata(ctx, Base.metadata)
     engine.dispose()
     assert diff == [], diff
 

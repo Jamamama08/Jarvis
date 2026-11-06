@@ -26,7 +26,28 @@ http
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     requests.push(body);
-    const last = body.messages.at(-1)?.content ?? "";
+    if (body.output_config?.format) {
+      // Structured-output request (memory suggestions): reply with a JSON message, not a stream.
+      const prompt = String(body.messages.at(-1)?.content ?? "");
+      const memories = prompt.includes("vegetarian")
+        ? [
+            { content: "Is vegetarian.", category: "personal", importance: 4 },
+            { content: "Is training for a half marathon in March.", category: "project", importance: 3 },
+          ]
+        : [];
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_json", type: "message", role: "assistant", model: body.model,
+        content: [{ type: "text", text: JSON.stringify({ memories }) }],
+        stop_reason: "end_turn", stop_sequence: null,
+        usage: { input_tokens: 400, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      }));
+      return;
+    }
+    const last = (() => {
+      const c = body.messages.at(-1)?.content ?? "";
+      return Array.isArray(c) ? c.at(-1).text : c; // memory context arrives as an earlier block
+    })();
     const slow = String(last).includes("slow");
     const reply = slow
       ? Array.from({ length: 200 }, (_, i) => `word${i} `)

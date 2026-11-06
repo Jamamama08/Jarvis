@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Brain, ListChecks, Loader2 } from "lucide-react";
+import { ListChecks, Loader2 } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 import { useRoute } from "./hooks/useRoute";
@@ -7,6 +7,7 @@ import { api } from "./lib/api";
 import type { ConversationSummary, SettingsResponse, User } from "./lib/types";
 import { AuthScreen } from "./views/AuthScreen";
 import { ChatView } from "./views/ChatView";
+import { MemoryView } from "./views/MemoryView";
 import { RoadmapView } from "./views/RoadmapView";
 import { SettingsView } from "./views/SettingsView";
 
@@ -105,25 +106,14 @@ function Shell({ user }: { user: User }) {
             onConversationCreated={(id) => navigate({ view: "chat", conversationId: id }, { replace: true })}
             onConversationsChanged={refresh}
             onOpenSidebar={openSidebar}
+            onOpenMemory={() => navigate({ view: "memory" })}
           />
         )}
         {route.view === "settings" && (
           <SettingsView user={user} settings={settings} onSettingsChanged={setSettings} onOpenSidebar={openSidebar} />
         )}
         {route.view === "memory" && (
-          <RoadmapView
-            title="Memory"
-            icon={<Brain size={20} />}
-            phase={3}
-            onOpenSidebar={openSidebar}
-            summary="Long-term memory you control. Nothing is remembered permanently unless you approve it."
-            features={[
-              "Preferences, personal details, projects and knowledge you approve",
-              "Full-text search (SQLite FTS5) and relevant-context retrieval",
-              "Edit, delete and view the change history of every memory",
-              "Duplicate detection",
-            ]}
-          />
+          <MemoryView onOpenSidebar={openSidebar} onOpenConversation={(id) => navigate({ view: "chat", conversationId: id })} />
         )}
         {route.view === "tasks" && (
           <RoadmapView

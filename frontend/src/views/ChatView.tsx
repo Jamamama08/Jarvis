@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Loader2, Menu } from "lucide-react";
+import { Loader2, Menu, Sparkles } from "lucide-react";
 import { Composer } from "../components/Composer";
 import { MessageBubble } from "../components/MessageBubble";
 import { StatusPill } from "../components/StatusPill";
@@ -15,6 +15,7 @@ interface Props {
   onConversationCreated: (id: string) => void;
   onConversationsChanged: () => void;
   onOpenSidebar: () => void;
+  onOpenMemory: () => void;
 }
 
 const SUGGESTIONS = [
@@ -24,12 +25,14 @@ const SUGGESTIONS = [
   "What can you help me with?",
 ];
 
-export function ChatView({ conversationId, user, settings, onConversationCreated, onConversationsChanged, onOpenSidebar }: Props) {
+export function ChatView({ conversationId, user, settings, onConversationCreated, onConversationsChanged, onOpenSidebar, onOpenMemory }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [title, setTitle] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; review: boolean } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const activeIdRef = useRef<string | null>(conversationId);
   const createdHereRef = useRef<string | null>(null);
@@ -43,6 +46,7 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
   useEffect(() => {
     activeIdRef.current = conversationId;
     setError(null);
+    setNotice(null);
     if (conversationId && createdHereRef.current === conversationId) {
       createdHereRef.current = null;
       return;
@@ -95,6 +99,7 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
         model: null,
         error: null,
         created_at: new Date().toISOString(),
+        memory_ids: [],
       };
       setMessages((m) => [...m, optimistic]);
       setStreaming(true);
@@ -171,6 +176,27 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
     }, 3000);
   }, []);
 
+  async function suggestMemories() {
+    if (!conversationId) return;
+    setSuggesting(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await api.suggestMemories(conversationId);
+      const n = res.created.length;
+      const skipped = res.skipped_duplicates ? ` (${res.skipped_duplicates} skipped as duplicates or unsafe)` : "";
+      setNotice(
+        n
+          ? { text: `${n} memory suggestion${n === 1 ? "" : "s"} ready for your review${skipped}.`, review: true }
+          : { text: `Nothing new worth remembering in this conversation${skipped}.`, review: false },
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
   const lastMessage = messages[messages.length - 1];
   const orbState: OrbState = !aiConfigured
     ? "offline"
@@ -190,6 +216,17 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
         <h2 className="min-w-0 flex-1 truncate text-sm font-medium" data-testid="conversation-title">
           {conversationId ? title || " " : "New conversation"}
         </h2>
+        {conversationId && aiConfigured && (
+          <button
+            className="btn-ghost px-2.5 py-1 text-xs"
+            onClick={suggestMemories}
+            disabled={suggesting || streaming || messages.length === 0}
+            title="Ask Claude to propose things worth remembering from this conversation. Nothing is saved until you approve it."
+          >
+            {suggesting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} className="text-arc" />}
+            <span className="hidden sm:inline">Suggest memories</span>
+          </button>
+        )}
         <StatusPill streaming={streaming} settings={settings} />
       </header>
 
@@ -234,6 +271,22 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
         )}
       </div>
 
+      {notice && (
+        <div role="status" className="mx-auto mb-2 w-full max-w-3xl px-4">
+          <div className="flex items-center gap-3 rounded-lg border border-arc/30 bg-arc/10 px-3 py-2 text-sm text-ink">
+            <Sparkles size={14} className="shrink-0 text-arc" />
+            <span className="flex-1">{notice.text}</span>
+            {notice.review && (
+              <button className="text-arc underline underline-offset-2" onClick={onOpenMemory}>
+                Review
+              </button>
+            )}
+            <button className="text-ink-faint hover:text-ink" onClick={() => setNotice(null)} aria-label="Dismiss">
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       {error && (
         <div role="alert" className="mx-auto mb-2 w-full max-w-3xl px-4">
           <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>

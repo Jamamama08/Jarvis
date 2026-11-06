@@ -20,5 +20,10 @@ def sync_url(url: str) -> str:
     return url.replace("+aiosqlite", "")
 
 
+def include_name(name, type_, parent_names) -> bool:
+    """Alembic filter: skip FTS5 virtual/shadow tables, which migrations manage with raw SQL."""
+    return not (type_ == "table" and name and name.startswith("memories_fts"))
+
+
 def upgrade_to_head(database_url: str) -> None:
     command.upgrade(alembic_config(database_url), "head")

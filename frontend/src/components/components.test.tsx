@@ -6,7 +6,7 @@ import type { Message } from "../lib/types";
 
 const base: Message = {
   id: "1", seq: 1, role: "assistant", content: "Hello sir", status: "complete",
-  model: "claude-x", error: null, created_at: "2026-11-06T12:00:00Z",
+  model: "claude-x", error: null, created_at: "2026-11-06T12:00:00Z", memory_ids: [],
 };
 
 describe("Composer", () => {
@@ -37,6 +37,13 @@ describe("Composer", () => {
 });
 
 describe("MessageBubble", () => {
+  it("shows how many memories were sent with a user message", () => {
+    const { rerender } = render(<MessageBubble message={{ ...base, role: "user", content: "hi", memory_ids: ["a", "b"] }} assistantName="JARVIS" />);
+    expect(screen.getByTestId("memories-used")).toHaveTextContent("2 memories used");
+    rerender(<MessageBubble message={{ ...base, role: "user", content: "hi", memory_ids: [] }} assistantName="JARVIS" />);
+    expect(screen.queryByTestId("memories-used")).toBeNull();
+  });
+
   it("renders roles and states", () => {
     const { rerender, container } = render(<MessageBubble message={{ ...base, role: "user", content: "hi" }} assistantName="JARVIS" />);
     expect(container.querySelector('[data-role="user"]')).toHaveTextContent("hi");

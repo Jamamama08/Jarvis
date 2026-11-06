@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import MessageRole, MessageStatus
+from app.models import MemoryCategory, MessageRole, MessageStatus
 
 
 class ORMModel(BaseModel):
@@ -69,6 +69,7 @@ class MessageOut(ORMModel):
     model: str | None
     error: str | None
     created_at: datetime
+    memory_ids: list[str] = []
 
 
 class ConversationSummary(ORMModel):
@@ -134,6 +135,7 @@ class UserPreferences(BaseModel):
     model: str = Field(default="", max_length=100, pattern=_MODEL_PATTERN)  # "" = server default
     max_output_tokens: int = Field(default=0, ge=0, le=128_000)  # 0 = server default
     effort: Effort = ""  # "" = the model's default effort
+    memory_enabled: bool = True  # send relevant approved memories with each message
     voice_input_enabled: bool = True
     speak_responses: bool = False
     voice_name: str = Field(default="", max_length=200)
@@ -146,6 +148,7 @@ class UserPreferencesUpdate(BaseModel):
     model: str | None = Field(default=None, max_length=100, pattern=_MODEL_PATTERN)
     max_output_tokens: int | None = Field(default=None, ge=0, le=128_000)
     effort: Effort | None = None
+    memory_enabled: bool | None = None
     voice_input_enabled: bool | None = None
     speak_responses: bool | None = None
     voice_name: str | None = Field(default=None, max_length=200)
@@ -200,3 +203,86 @@ class UsageSummary(BaseModel):
     days: int
     totals: UsageRow
     by_model: list[UsageRow]
+
+
+# --- Memory -------------------------------------------------------------------
+
+
+class MemoryOut(ORMModel):
+    id: str
+    category: MemoryCategory
+    content: str
+    importance: int
+    approved: bool
+    source: str
+    project_id: str | None
+    source_conversation_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: datetime | None
+
+
+class MemoryCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+    category: MemoryCategory = MemoryCategory.knowledge
+    importance: int = Field(default=3, ge=1, le=5)
+    project_id: str | None = None
+    allow_near_duplicate: bool = False
+
+
+class MemoryUpdate(BaseModel):
+    content: str | None = Field(default=None, min_length=1, max_length=2000)
+    category: MemoryCategory | None = None
+    importance: int | None = Field(default=None, ge=1, le=5)
+    project_id: str | None = None
+    allow_near_duplicate: bool = False
+
+
+class MemoryList(BaseModel):
+    items: list[MemoryOut]
+    total: int
+    counts: dict[str, int]
+
+
+class MemoryHistoryOut(ORMModel):
+    id: str
+    memory_id: str
+    action: str
+    old_content: str | None
+    new_content: str | None
+    created_at: datetime
+
+
+class MemorySuggestions(BaseModel):
+    created: list[MemoryOut]
+    skipped_duplicates: int
+
+
+# --- Projects -----------------------------------------------------------------
+
+ProjectStatus = Literal["active", "paused", "completed", "archived"]
+
+
+class ProjectOut(ORMModel):
+    id: str
+    name: str
+    description: str
+    status: str
+    progress_notes: str
+    created_at: datetime
+    updated_at: datetime
+    memory_count: int = 0
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    status: ProjectStatus = "active"
+    progress_notes: str = Field(default="", max_length=20000)
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    status: ProjectStatus | None = None
+    progress_notes: str | None = Field(default=None, max_length=20000)

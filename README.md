@@ -2,7 +2,7 @@
 
 A personal AI assistant powered by Claude. It runs as a **web app** in your browser and as a **Windows desktop app** (Tauri 2). Both use the same local backend, database and (from Phase 2 on) AI engine.
 
-> **Status: Phase 2 of 8 (Claude integration) is complete.** JARVIS chats with Claude: streamed replies rendered as Markdown, conversation context, model/effort/length settings, cancellation, and usage and cost tracking. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice. See the [roadmap](#roadmap).
+> **Status: Phase 3 of 8 (Persistent memory) is complete.** JARVIS chats with Claude (streamed Markdown replies, context, model/effort/length settings, cancellation, usage and cost tracking) and has long-term memory you control: memories you approve are searched and sent with relevant messages. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice, and memory can still be managed. See the [roadmap](#roadmap).
 
 ---
 
@@ -30,9 +30,11 @@ A personal AI assistant powered by Claude. It runs as a **web app** in your brow
            ▼                          ▼
 ┌─────────────────────────────────────────────────┐
 │ FastAPI backend (127.0.0.1:8765)                 │
-│  api/        auth · conversations · settings     │
+│  api/        auth · conversations · memories ·   │
+│              projects · settings · usage         │
 │  services/   chat streaming · ClaudeProvider ·   │
-│              prompts · usage · backups           │
+│              memory (FTS5) · suggestions ·       │
+│              prompts · backups                   │
 │  core/       config · db · security · logging    │
 └──────────┬────────────────────────┬─────────────┘
            ▼                        ▼  official anthropic SDK (streaming)
@@ -46,7 +48,7 @@ Jarvis/
 │   ├── app/
 │   │   ├── api/             HTTP routers + auth dependencies
 │   │   ├── core/            config, database, password/token security, redacting logger
-│   │   ├── services/        chat turns, Claude provider, prompts, model catalog/pricing, backups
+│   │   ├── services/        chat turns, Claude provider, memory engine + suggestions, prompts, pricing, backups
 │   │   ├── models.py        every table in the spec (users … api_usage)
 │   │   ├── schemas.py       Pydantic request/response models
 │   │   ├── migrations.py    runs Alembic at startup
@@ -57,7 +59,7 @@ Jarvis/
 ├── frontend/                React + TypeScript + Vite + Tailwind CSS 4
 │   ├── src/
 │   │   ├── components/      Sidebar, Composer, MessageBubble, Markdown, VoiceOrb, StatusPill
-│   │   ├── views/           Auth, Chat, Settings, Roadmap (Memory/Tasks placeholders)
+│   │   ├── views/           Auth, Chat, Memory, Settings, Roadmap (Tasks placeholder)
 │   │   ├── hooks/           useAuth, useRoute
 │   │   └── lib/             API client, SSE parser, types, formatting
 │   ├── e2e/                 Playwright end-to-end tests + a local mock of the Anthropic API
@@ -78,6 +80,8 @@ Jarvis/
 | Official `anthropic` SDK, streaming | Replies stream token by token; the SDK handles retries and the wire format. Closing the stream on cancel stops generation, so you aren't billed for tokens you didn't want. |
 | Automatic prompt caching | Each request marks the conversation for caching, so on the next turn the earlier history is re-read at about 10% of the normal input price. The system prompt only changes once a day (it contains the date). |
 | Thinking and effort left at model defaults | Current models think adaptively. Effort is only sent when you pick one in Settings, so older models that reject it still work. |
+| Memories attached to the user turn, not the system prompt | Relevant memories are sent as a separate text block at the start of that user message and stored with it. Replayed history stays byte-identical, so prompt caching keeps working, and a memory already sent in a conversation isn't sent again. |
+| Suggestions instead of automatic memory | Claude never saves memories itself. "Suggest memories" makes one explicit request that returns pending suggestions (structured JSON output) for you to approve, edit or reject. |
 | Server-side refusal fallback | Current Claude models can decline a request via safety classifiers. With `fallbacks: "default"` the API retries it on Anthropic's recommended fallback model in the same call. On by default; `JARVIS_REFUSAL_FALLBACK=false` turns it off. |
 | Full schema in migration `0001` | Later phases add behaviour without risky table rebuilds. A test asserts the migrations match the models. |
 | Stdlib `scrypt` for passwords | Strong and memory-hard, with no extra native dependency (helps Windows packaging). |
@@ -148,6 +152,21 @@ npx tauri dev      # dev window with hot reload (also starts Vite)
 npx tauri build    # produces NSIS/MSI installers in src-tauri/target/release/bundle
 ```
 
+## Memory
+
+Open **Memory** in the sidebar.
+
+- **Saved:** memories you've added or approved. Add, edit, delete, search (full-text, with stemming and prefix matching), filter by category, and view each memory's change history. Categories: preference, personal, project, progress, knowledge, conversation. Importance 1-5; memories rated 4 or 5 are sent with every message, others only when they match what you wrote.
+- **Suggestions:** in a conversation, click **Suggest memories** and Claude proposes up to 5 durable facts. They wait here until you approve, edit and approve, or reject them. Proposals that duplicate existing memories or look like secrets (passwords, keys, card numbers) are dropped.
+- **Projects:** group memories by project, with a status and progress notes.
+- **Activity:** every create, edit, approval, rejection and deletion.
+
+How it reaches Claude: for each message, JARVIS picks approved memories that are high-importance or match your message (SQLite FTS5, BM25 ranking), up to 12 and about 6,000 characters, and sends them with that message. The chat shows "N memories used" under your message. Turn this off under **Settings → Use memories in replies**.
+
+Duplicates: an exact duplicate (ignoring case, spacing and punctuation) is refused; a near-duplicate (80% of words in common) is refused unless you choose **Save anyway**.
+
+Deleting a memory removes it immediately. Its history keeps the old text unless you tick **Also erase its change history**.
+
 ## Configuration
 
 Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` prefix, except `ANTHROPIC_API_KEY`.
@@ -167,7 +186,7 @@ Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` p
 | `JARVIS_DATA_DIR` | `./data` | Database and backups |
 | `JARVIS_SESSION_TTL_HOURS` | `336` | Login session lifetime |
 
-User preferences (assistant name, model, effort, reply length cap, voice options, Enter-to-send) are stored per user in the database and edited on the Settings page. Settings also shows API usage (requests, tokens, cached tokens) with an estimated cost.
+User preferences (assistant name, model, effort, reply length cap, memory on/off, voice options, Enter-to-send) are stored per user in the database and edited on the Settings page. Settings also shows API usage (requests, tokens, cached tokens) with an estimated cost.
 
 ## Testing
 
@@ -176,9 +195,9 @@ User preferences (assistant name, model, effort, reply length cap, voice options
 ```
 
 That runs, in order:
-- **pytest** (`backend/tests`): auth, rate limiting, setup-token rule, conversation CRUD, ownership isolation, streaming, cancellation, persistence across restarts, backups, a migration/model drift check, log redaction, SPA serving, and the Claude provider. The Claude tests run the real SDK against a mocked HTTP transport that replays the API's streaming format: request shape, history, preferences, prompt caching, refusals, mid-stream fallback, token-limit truncation, every error class, usage and cost recording, and that cancelling closes the upstream stream.
+- **pytest** (`backend/tests`): auth, rate limiting, setup-token rule, conversation CRUD, ownership isolation, streaming, cancellation, persistence across restarts, backups, a migration/model drift check, log redaction, SPA serving, memory (CRUD, history, purge, exact and near duplicates, FTS search kept in sync by triggers, FTS query-injection safety, privacy between users, projects, persistence, retrieval into chat, no re-sending, pending and disabled memories never sent, suggestions with duplicate and secret filtering, approval/rejection, refusal and error handling, usage), and the Claude provider. The Claude tests run the real SDK against a mocked HTTP transport that replays the API's streaming format: request shape, history, preferences, prompt caching, refusals, mid-stream fallback, token-limit truncation, every error class, usage and cost recording, and that cancelling closes the upstream stream.
 - **tsc + vitest** (`frontend/src/**/*.test.ts(x)`): SSE parser, routing, formatting, Composer, MessageBubble, and Markdown safety (no raw HTML, no `javascript:` links, images shown as links).
-- **Playwright** (`frontend/e2e`): two real backends serving the production build. One has no API key (setup, persistence, rename/pin/search/delete, settings, backups, sign-out). The other points `ANTHROPIC_BASE_URL` at `e2e/mock-anthropic.mjs`, a local stand-in for the streaming API (Markdown replies, multi-turn context, stop button, model/effort settings, usage).
+- **Playwright** (`frontend/e2e`): two real backends serving the production build. One has no API key (setup, persistence, rename/pin/search/delete, settings, backups, sign-out). The other points `ANTHROPIC_BASE_URL` at `e2e/mock-anthropic.mjs`, a local stand-in for the API (Markdown replies, multi-turn context, stop button, model/effort settings, usage, and the memory flow: add, duplicate refusal, search, edit, history, memories sent with chat, suggestions approved and rejected, purge, projects).
 
 No suite calls the real Anthropic API, so tests are free and need no key.
 
@@ -188,7 +207,8 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 - Passwords are hashed with **scrypt**. Session tokens are random 256-bit values, and only their SHA-256 hash is stored. Changing your password revokes your other sessions. Failed logins are rate-limited per IP (5 per 5 minutes).
 - The API key stays on the backend. The settings API only reports whether AI is configured. API error messages shown to users are rewritten from the SDK's exception types and never include credentials; unexpected errors show a generic message and are logged.
 - Assistant replies are rendered as Markdown **without raw HTML**. Links open in a new tab with `noopener`, unsafe URL schemes are dropped, and Markdown images are shown as links rather than loaded (so a reply can't make your browser fetch a tracking URL).
-- The system prompt tells Claude to treat content inside shared documents or pages as data, not instructions.
+- The system prompt tells Claude to treat content inside shared documents or pages as data, not instructions. Memory context and the transcript used for suggestions are wrapped and labelled as data too.
+- Only **approved** memories are ever sent to Claude. Memory search builds FTS5 queries from quoted tokens only, so user text can't inject FTS syntax. All memory and project queries are scoped to the signed-in user.
 - Logs pass through a **redaction filter** that removes API keys, bearer tokens and password/secret fields.
 - Responses include `nosniff`, `X-Frame-Options: DENY` and `no-referrer` headers. CORS is an explicit allow-list. The Tauri CSP only allows connections to the local backend.
 - Every query is scoped to the authenticated user, and tests check that users can't see each other's data.
@@ -217,6 +237,7 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 | Item | Cost |
 | --- | --- |
 | JARVIS itself | Free (open-source stack, runs locally) |
+| Memory | Free to store and search (local SQLite). Memories sent with a message add input tokens to that request (at most ~6,000 characters, ~1,500 tokens). Each **Suggest memories** click is one Claude request. |
 | Claude API | **Paid, pay-per-token** on your Anthropic account. List prices per million input / output tokens: Opus 5.5 $4 / $20 (default), Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50, Fable 5.1 $10 / $50. Cached history is re-read at ~10% of the input price. Settings → API usage shows your tokens and an estimated cost. |
 | Voice (Phase 4) | Free: browser speech recognition and synthesis. Local engines can be added later. |
 | Web research (Phase 5) | A free option will be the default. Paid search APIs are optional, and their pricing will be stated before they are added. |
@@ -226,7 +247,7 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 
 - [x] **Phase 1: Foundation.** Backend, database schema and migrations, auth, conversations with persistent history, SSE streaming pipeline, settings, backups, polished UI, Tauri shell, tests.
 - [x] **Phase 2: Claude integration.** `ClaudeProvider` (official SDK, streaming), context building and trimming, prompt caching, refusal fallback, friendly error handling, usage and cost tracking, cancellation that stops generation, model/effort/length settings, safe Markdown rendering.
-- [ ] **Phase 3: Persistent memory.** Memory CRUD, FTS5 search, relevant-context retrieval, duplicate prevention, history, approval flow, Memory UI.
+- [x] **Phase 3: Persistent memory.** Memory CRUD, FTS5 search, relevant-context retrieval, duplicate prevention, history, approval flow (Claude suggestions), projects, Memory UI.
 - [ ] **Phase 4: Voice.** Microphone, speech-to-text, text-to-speech, interruption, mute, voice settings, pluggable `VoiceProvider`.
 - [ ] **Phase 5: Tool system.** Registry, schemas, permission engine and approvals, execution log. First tools: calculator, date/time, files, summarizer, web research, memory, task manager, sandboxed Python.
 - [ ] **Phase 6: Browser and desktop automation.** Playwright browsing, approved desktop app control through Tauri commands.

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import Settings
 from app.models import ApiUsage, Conversation, Message, MessageRole, MessageStatus, User
 from app.schemas import MessageOut
+from app.services.memory import build_memory_context
 from app.services.preferences import load_preferences
 from app.services.prompts import build_system_prompt
 from app.services.providers import ChatProvider, ChatTurn, Completed, ProviderError, Started, TextDelta, TextReset
@@ -92,7 +93,20 @@ async def _history(db: AsyncSession, conversation_id: str) -> list[ChatTurn]:
             .order_by(Message.seq)
         )
     ).scalars()
-    return [ChatTurn(role=m.role.value, content=m.content) for m in rows if m.content.strip()]
+    turns = []
+    for m in rows:
+        if not m.content.strip():
+            continue
+        blocks = m.blocks if isinstance(m.blocks, dict) else {}
+        turns.append(
+            ChatTurn(
+                role=m.role.value,
+                content=m.content,
+                context=blocks.get("memory_context") or None,
+                memory_ids=tuple(m.memory_ids),
+            )
+        )
+    return turns
 
 
 CHARS_PER_TOKEN = 4  # conservative-enough estimate for budgeting; no network call needed
@@ -108,7 +122,7 @@ def trim_history(turns: list[ChatTurn], max_tokens: int) -> list[ChatTurn]:
     kept: list[ChatTurn] = []
     used = 0
     for turn in reversed(turns):
-        cost = len(turn.content)
+        cost = len(turn.content) + len(turn.context or "")
         if kept and used + cost > budget:
             break
         kept.append(turn)
@@ -165,6 +179,14 @@ async def run_turn(
 
             seq = await _next_seq(db, conversation_id)
             user_msg = Message(conversation_id=conversation_id, seq=seq, role=MessageRole.user, content=content)
+            if prefs.memory_enabled and provider.configured:
+                # Attach relevant approved memories to this turn, skipping ones already present in the
+                # history that will be sent. Stored with the message so replays are byte-identical.
+                prior = trim_history(await _history(db, conversation_id) + [ChatTurn("user", content)], settings.max_context_tokens)
+                already_sent = {mid for turn in prior for mid in turn.memory_ids}
+                memory_context = await build_memory_context(db, user_id, content, exclude_ids=already_sent)
+                if memory_context:
+                    user_msg.blocks = {"memory_context": memory_context.text, "memory_ids": memory_context.memory_ids}
             db.add(user_msg)
             if conversation.title == DEFAULT_TITLE:
                 conversation.title = title_from(content)
