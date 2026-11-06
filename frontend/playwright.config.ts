@@ -38,7 +38,7 @@ export default defineConfig({
   use: { trace: "off", ...devices["Desktop Chrome"], viewport: { width: 1360, height: 860 } },
   projects: [
     { name: "offline", testMatch: "app.spec.ts", use: { baseURL: `http://127.0.0.1:${OFFLINE_PORT}` } },
-    { name: "claude", testMatch: /(claude|memory|voice|tools)\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${CLAUDE_PORT}` } },
+    { name: "claude", testMatch: /(claude|memory|voice|tools|automation)\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${CLAUDE_PORT}` } },
   ],
   webServer: [
     {
@@ -51,6 +51,8 @@ export default defineConfig({
     backend(CLAUDE_PORT, {
       ANTHROPIC_API_KEY: "sk-ant-e2e-mock-key",
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${MOCK_PORT}`,
+      // The E2E test page is served on localhost, so allow private-network browsing for this server only.
+      JARVIS_BROWSER_ALLOW_PRIVATE_NETWORK: "true",
     }),
   ],
 });

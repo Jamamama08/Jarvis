@@ -168,6 +168,7 @@ async def send_message(
         content=body.content,
         tools=request.app.state.tools,
         approvals=request.app.state.approvals,
+        services=request.app.state.tool_services,
     )
     return StreamingResponse(
         stream,

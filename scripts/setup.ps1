@@ -6,5 +6,7 @@ py -3 -m venv backend\.venv
 backend\.venv\Scripts\python.exe -m pip install -q --upgrade pip
 backend\.venv\Scripts\python.exe -m pip install -q -e "backend[dev]"
 Push-Location frontend; npm install; Pop-Location
+# Browser for JARVIS's web automation (one-time download, ~150 MB).
+backend\.venv\Scripts\python.exe -m playwright install chromium
 Push-Location backend; .venv\Scripts\python.exe -m app.cli migrate; Pop-Location
 Write-Host "Setup complete. Run scripts\dev.ps1 to start JARVIS."

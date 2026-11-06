@@ -71,6 +71,25 @@ class Settings(BaseSettings):
     max_tool_output_chars: int = Field(default=20_000, ge=1_000)
     python_tool_enabled: bool = True
 
+    # --- Browser automation (Phase 6) ---------------------------------------------------
+    browser_enabled: bool = True
+    browser_headless: bool = True  # set false to watch the browser work (desktop use)
+    # Pages on private/loopback/link-local addresses (your router, NAS, this machine) are blocked
+    # unless enabled, so web content can't use JARVIS to reach your local network.
+    browser_allow_private_network: bool = False
+    browser_idle_timeout_seconds: float = Field(default=600.0, gt=0)
+    browser_navigation_timeout_seconds: float = Field(default=30.0, gt=0)
+
+    # --- Desktop control (Phase 6) ------------------------------------------------------
+    # None = on only when the server listens on loopback (i.e. it runs on your own machine).
+    desktop_control_enabled: bool | None = None
+
+    @property
+    def desktop_control_active(self) -> bool:
+        if self.desktop_control_enabled is not None:
+            return self.desktop_control_enabled
+        return self.host in ("127.0.0.1", "localhost", "::1")
+
     @property
     def resolved_workspace_dir(self) -> Path:
         return (self.workspace_dir or self.data_dir / "workspace").resolve()

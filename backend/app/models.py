@@ -359,3 +359,24 @@ class ApiUsage(Base):
     cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     web_search_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Desktop control (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class DesktopApp(TimestampMixin, Base):
+    """An application the user approved for JARVIS to launch. Only the user can add these."""
+
+    __tablename__ = "desktop_apps"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_desktop_apps_user_name"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    args: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    #: Whether JARVIS may pass one extra argument: a web URL or a file in the workspace.
+    allow_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")

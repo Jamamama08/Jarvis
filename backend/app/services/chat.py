@@ -227,6 +227,7 @@ async def run_turn(
     content: str,
     tools: ToolRegistry | None = None,
     approvals: ApprovalBroker | None = None,
+    services: dict | None = None,
 ) -> AsyncIterator[str]:
     """Async generator of SSE frames for one user turn: the agent loop.
 
@@ -375,6 +376,7 @@ async def run_turn(
                             block, holder, state=state, sessionmaker=sessionmaker, settings=settings, provider=provider,
                             tools=tools, approvals=approvals, cancel_event=cancel_event, user_id=user_id,
                             conversation_id=conversation_id, message_id=reply.id, model=model, usage_db=db,
+                            services=services or {},
                         ):
                             yield frame
                         results.append(holder["result"])
@@ -483,6 +485,7 @@ async def _tool_call(
     message_id: str,
     model: str,
     usage_db: AsyncSession,
+    services: dict,
 ) -> AsyncIterator[str]:
     """Validate, authorise, run and log one tool call. Puts the tool_result block in holder['result']."""
     tool_use_id, name, raw = block["id"], block.get("name", ""), block.get("input")
@@ -512,6 +515,17 @@ async def _tool_call(
             result(prep.error, True)
             yield await emit("tool_result")
             return
+
+        if tool.preview is not None:
+            # Describe the call using live state (e.g. the element's label and the site) for the approval prompt.
+            try:
+                async with shielded_session(sessionmaker) as preview_db:
+                    preview_ctx = ToolContext(db=preview_db, user_id=user_id, conversation_id=conversation_id,
+                                              settings=settings, provider=provider, model=model, services=services)
+                    prep.summary = (await asyncio.wait_for(tool.preview(preview_ctx, prep.args), 5))[:300]
+                execution.input = {**(execution.input or {}), "_summary": prep.summary}
+            except Exception:  # cosmetic: fall back to the static summary
+                pass
 
         decision = permissions.resolve(tool, await permissions.load_policies(tdb, user_id))
         if decision == PermissionDecision.deny:
@@ -573,7 +587,7 @@ async def _tool_call(
         async with shielded_session(sessionmaker) as tool_session:
             ctx = ToolContext(
                 db=tool_session, user_id=user_id, conversation_id=conversation_id, settings=settings,
-                provider=provider, model=model, record_usage=record,
+                provider=provider, model=model, record_usage=record, services=services,
             )
             ok, output, duration = await executor.run(
                 tool, ctx, prep.args, default_timeout=settings.tool_timeout_seconds, output_limit=settings.max_tool_output_chars

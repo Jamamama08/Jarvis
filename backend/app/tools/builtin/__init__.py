@@ -1,5 +1,17 @@
-"""All built-in tools. Browser automation and desktop control arrive in Phase 6."""
+"""All built-in tools."""
 
+from app.tools.builtin.automation import (
+    browser_back,
+    browser_click,
+    browser_close,
+    browser_open,
+    browser_read,
+    browser_select,
+    browser_type,
+    list_desktop_apps,
+    open_desktop_app,
+    open_workspace_file,
+)
 from app.tools.builtin.basic import calculator, current_datetime
 from app.tools.builtin.data_tools import (
     create_task,
@@ -28,4 +40,14 @@ BUILTIN_TOOLS = [
     search_memories,
     suggest_memory,
     run_python,
+    browser_open,
+    browser_read,
+    browser_back,
+    browser_click,
+    browser_type,
+    browser_select,
+    browser_close,
+    list_desktop_apps,
+    open_desktop_app,
+    open_workspace_file,
 ]

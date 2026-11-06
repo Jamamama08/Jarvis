@@ -4,14 +4,16 @@ JARVIS is a personal AI assistant with a web app and a Windows desktop app (Taur
 
 ## Current phase
 
-**Phases 1-5 (Foundation, Claude integration, Persistent memory, Voice, Tool system) are complete. Phase 6 (Browser and desktop automation) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+**Phases 1-6 (Foundation, Claude integration, Persistent memory, Voice, Tool system, Browser and desktop automation) are complete. Phase 7 (Autonomous tasks) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+
+**Working agreement (from the user):** don't ask for permission to begin the next phase. When a phase is tested, documented, committed and pushed, continue straight to the next one.
 
 ## Layout
 
 - `backend/app/`: FastAPI. `api/` routers, `services/` logic, `core/` infrastructure, `models.py` (all tables), `schemas.py`.
 - `backend/alembic/versions/`: migrations. Never edit an applied migration. Add a new one with `alembic revision --autogenerate`, then replace any `app.models.X` type references with plain `sa.*` types.
 - `frontend/src/`: React 19 + TS + Tailwind 4 (`@theme` tokens and `@utility` classes in `index.css`). No router library (`hooks/useRoute.ts`).
-- `frontend/src-tauri/`: desktop shell. Desktop capabilities must be explicit Tauri commands that go through the backend permission system.
+- `frontend/src-tauri/`: desktop shell (a webview; no custom native commands). Desktop control runs in the backend (`app/automation/desktop.py`), which always runs on the same machine, so it goes through the tool permission system. Don't expose native capabilities to the webview: injected page script could reach them.
 
 ## Commands
 
@@ -80,7 +82,14 @@ cd frontend && npx vite build && npx playwright test --trace off
 - Tools are sent with `eager_input_streaming: true`; inputs are validated with Pydantic before running, and `ProviderJSONError` re-issues the request (bounded). Forced `tool_choice` is a 400 on current models: never send it.
 - Tool output is truncated (`max_tool_output_chars`) for Claude, and redacted + truncated for the log. The Python runner gets a scrubbed environment; keep it that way.
 
-## Phase 6 entry points
+## Automation notes
 
-- Browser automation: Playwright (already a dev dependency on the frontend; add the Python package to the backend if used there) behind new tools, restricted by default. Page content is untrusted data. Block private-network URLs unless the user allows them.
-- Desktop control: explicit Tauri commands for an allow-list of approved apps, each mirrored by a backend tool so the permission system and logging apply. The desktop app still needs the backend running separately (sidecar is Phase 8).
+- `app/automation/browser.py`: `BrowserManager` (one isolated context per user, idle cleanup, snapshot = text + numbered elements via `data-jarvis-ref`). Never type into password fields. Keep reading tools automatic and interaction tools restricted with a `preview` that names the element and site.
+- `app/automation/netguard.py`: every browser request goes through `NetworkGuard` (http/https only; private, loopback, link-local, CGNAT and metadata addresses blocked unless `browser_allow_private_network`). Tests that load the local test site set that flag.
+- `app/automation/desktop.py`: app allow-list (user-managed only, no tool can add apps), one optional target (http(s) URL or workspace file, never starting with `-`), `safe_env()` for child processes, `check_openable` refuses executables. Desktop tools are only offered when `settings.desktop_control_active`.
+- Python Playwright must match the installed browser build (`playwright==1.63.0` here; `python -m playwright install chromium` on new machines).
+
+## Phase 7 entry points
+
+- The `tasks` table has `parent_id`, `plan` (JSON), `status`, `result`, `error`, `attempts`, `started_at`/`finished_at`. Autonomous runs should reuse `run_turn`'s tool execution (`_tool_call`) and permission/approval flow rather than a second loop.
+- Requirements: break requests into steps (a plan), run steps sequentially, run independent ones in parallel when safe (read-only/automatic tools only), retry recoverable failures, verify results, explain outcomes, history, cancellation. Enforce limits (rule 4).

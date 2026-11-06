@@ -30,6 +30,16 @@ const PRETTY: Record<string, string> = {
   suggest_memory: "Suggest memory",
   run_python: "Run Python",
   web_search: "Web search",
+  browser_open: "Open web page",
+  browser_read: "Read web page",
+  browser_back: "Browser back",
+  browser_click: "Click on page",
+  browser_type: "Type on page",
+  browser_select: "Choose on page",
+  browser_close: "Close browser",
+  list_desktop_apps: "List apps",
+  open_desktop_app: "Open app",
+  open_workspace_file: "Open file",
   web_fetch: "Fetch web page",
 };
 

@@ -10,13 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app import __version__
-from app.api import auth, conversations, memories, system, tools
+from app.api import auth, automation, conversations, memories, system, tools
 from app.core.config import Settings, get_settings
 from app.core.db import Database
 from app.core.logging import configure_logging
 from app.migrations import upgrade_to_head
 from app.services.chat import GenerationRegistry
 from app.services.providers import build_provider
+from app.automation.browser import BrowserManager
 from app.tools.executor import ApprovalBroker
 from app.tools.registry import default_registry
 
@@ -37,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await app.state.browser.shutdown()
             await app.state.db.dispose()
 
     app = FastAPI(title="JARVIS", version=__version__, lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -46,6 +48,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.login_limiter = auth.LoginRateLimiter()
     app.state.tools = default_registry()
     app.state.approvals = ApprovalBroker()
+    app.state.browser = BrowserManager(settings)
+    app.state.tool_services = {"browser": app.state.browser}
 
     app.add_middleware(
         CORSMiddleware,
@@ -62,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(memories.router)
     app.include_router(tools.router)
+    app.include_router(automation.router)
 
     _mount_frontend(app, settings.frontend_dist)
     return app

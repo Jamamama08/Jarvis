@@ -240,3 +240,22 @@ export interface MemoryInput {
   project_id: string | null;
   allow_near_duplicate?: boolean;
 }
+
+export interface DesktopApp {
+  id: string;
+  name: string;
+  path: string;
+  args: string[];
+  allow_target: boolean;
+  description: string;
+}
+
+export interface AutomationStatus {
+  desktop_enabled: boolean;
+  desktop_reason: string | null;
+  platform: string;
+  browser_enabled: boolean;
+  browser_headless: boolean;
+  browser_private_network: boolean;
+  browser_open_url: string | null;
+}

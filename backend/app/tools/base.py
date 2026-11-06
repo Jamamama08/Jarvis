@@ -37,6 +37,8 @@ class ToolContext:
     model: str
     #: Called with the usage of any Claude request a tool makes (e.g. the summarizer).
     record_usage: Callable[[Completed], Awaitable[None]] | None = None
+    #: Shared services from the app (e.g. "browser": BrowserManager).
+    services: dict = field(default_factory=dict)
 
     @property
     def workspace(self) -> Path:
@@ -60,6 +62,8 @@ class Tool:
     summarize: Callable[[Any], str] | None = None
     #: Optional check whether the tool is offered at all (e.g. a disabled feature).
     enabled: Callable[[Settings], bool] = field(default=lambda settings: True)
+    #: Optional async description of what a call will do, using live state (shown in approvals).
+    preview: Callable[[ToolContext, Any], Awaitable[str]] | None = None
 
     def definition(self) -> dict:
         schema = self.input_model.model_json_schema()

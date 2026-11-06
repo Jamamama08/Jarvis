@@ -10,6 +10,8 @@ import type {
   MemoryInput,
   MemoryList,
   Project,
+  AutomationStatus,
+  DesktopApp,
   Task,
   ToolExecution,
   ToolsOverview,
@@ -171,6 +173,11 @@ export const api = {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]);
     return request<ToolExecution[]>(`/api/tools/executions?${qs}`);
   },
+  automationStatus: () => request<AutomationStatus>("/api/automation/status"),
+  closeBrowser: () => request<void>("/api/browser/close", json("POST")),
+  listDesktopApps: () => request<DesktopApp[]>("/api/desktop/apps"),
+  addDesktopApp: (body: Omit<DesktopApp, "id">) => request<DesktopApp>("/api/desktop/apps", json("POST", body)),
+  removeDesktopApp: (id: string) => request<void>(`/api/desktop/apps/${id}`, json("DELETE")),
   listTasks: (state: "open" | "done" | "all" = "all") => request<Task[]>(`/api/tasks?state=${state}`),
   createTask: (title: string, description = "") => request<Task>("/api/tasks", json("POST", { title, description })),
   updateTask: (id: string, body: Partial<Pick<Task, "title" | "description">> & { status?: "pending" | "completed" | "cancelled" }) =>

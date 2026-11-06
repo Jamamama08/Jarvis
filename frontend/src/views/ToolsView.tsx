@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, Globe, History, Loader2, Menu, ShieldCheck, Wrench } from "lucide-react";
+import { AppWindow, FolderOpen, Globe, History, Loader2, Menu, ShieldCheck, Wrench } from "lucide-react";
+import { AutomationPanel } from "../components/AutomationPanel";
 import { api } from "../lib/api";
 import { relativeTime } from "../lib/format";
 import type { Decision, PermissionLevel, SettingsResponse, ToolExecution, ToolsOverview } from "../lib/types";
@@ -14,7 +15,7 @@ const LEVEL_TEXT: Record<PermissionLevel, { title: string; hint: string }> = {
 const DECISION_TEXT: Record<Decision, string> = { allow: "Run automatically", ask: "Ask me first", deny: "Never" };
 
 export function ToolsView({ settings, onSettingsChanged, onOpenSidebar }: { settings: SettingsResponse | null; onSettingsChanged: (s: SettingsResponse) => void; onOpenSidebar: () => void }) {
-  const [tab, setTab] = useState<"tools" | "activity">("tools");
+  const [tab, setTab] = useState<"tools" | "automation" | "activity">("tools");
   const [overview, setOverview] = useState<ToolsOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,15 +50,23 @@ export function ToolsView({ settings, onSettingsChanged, onOpenSidebar }: { sett
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-5 px-4 py-6">
           <nav className="flex gap-1 rounded-xl border border-line bg-panel p-1" role="tablist">
-            {(["tools", "activity"] as const).map((t) => (
+            {(
+              [
+                ["tools", "Tools", <Wrench key="w" size={14} />],
+                ["automation", "Browser & apps", <AppWindow key="a" size={14} />],
+                ["activity", "Activity log", <History key="h" size={14} />],
+              ] as const
+            ).map(([t, label, icon]) => (
               <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ${tab === t ? "bg-raised text-ink" : "text-ink-dim hover:text-ink"}`}>
-                {t === "tools" ? <Wrench size={14} /> : <History size={14} />} {t === "tools" ? "Tools" : "Activity log"}
+                {icon} {label}
               </button>
             ))}
           </nav>
           {error && <p role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
           {tab === "activity" ? (
             <ActivityLog />
+          ) : tab === "automation" ? (
+            <AutomationPanel />
           ) : !overview ? (
             <Loader2 className="mx-auto animate-spin text-ink-faint" />
           ) : (

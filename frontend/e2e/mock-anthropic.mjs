@@ -12,6 +12,11 @@ const frame = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n
 
 http
   .createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/__page") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html><head><title>Malibu Weather</title></head><body><h1>Malibu</h1><p>Sunny, 24 degrees.</p><a href='/__page'>Refresh</a></body></html>");
+      return;
+    }
     if (req.method === "GET" && req.url === "/__requests") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(requests));
@@ -97,6 +102,8 @@ function pickTool(text, available) {
     [/^save a note$/i, () => ({ name: "write_file", input: { path: "notes/todo.md", content: "Buy milk\n", mode: "create" } })],
     [/^delete the note$/i, () => ({ name: "delete_file", input: { path: "notes/todo.md" } })],
     [/^add task: (.+)$/i, (m) => ({ name: "create_task", input: { title: m[1] } })],
+    [/^browse (\S+)$/i, (m) => ({ name: "browser_open", input: { url: m[1] } })],
+    [/^open app (.+)$/i, (m) => ({ name: "open_desktop_app", input: { name: m[1] } })],
   ];
   for (const [re, make] of rules) {
     const m = text.match(re);
