@@ -91,6 +91,7 @@ async def usage(user: CurrentUser, db: DbSession, days: int = Query(default=30, 
                 func.sum(ApiUsage.output_tokens),
                 func.sum(ApiUsage.cache_read_tokens),
                 func.sum(ApiUsage.cache_write_tokens),
+                func.sum(ApiUsage.web_search_requests),
             )
             .where(ApiUsage.user_id == user.id, ApiUsage.created_at >= since)
             .group_by(ApiUsage.model)
@@ -105,9 +106,10 @@ async def usage(user: CurrentUser, db: DbSession, days: int = Query(default=30, 
             output_tokens=o or 0,
             cache_read_tokens=cr or 0,
             cache_write_tokens=cw or 0,
-            estimated_cost_usd=estimate_cost(model, i or 0, o or 0, cr or 0, cw or 0),
+            web_search_requests=ws or 0,
+            estimated_cost_usd=estimate_cost(model, i or 0, o or 0, cr or 0, cw or 0, ws or 0),
         )
-        for model, n, i, o, cr, cw in rows
+        for model, n, i, o, cr, cw, ws in rows
     ]
     costs = [r.estimated_cost_usd for r in by_model]
     totals = UsageRow(
@@ -117,6 +119,7 @@ async def usage(user: CurrentUser, db: DbSession, days: int = Query(default=30, 
         output_tokens=sum(r.output_tokens for r in by_model),
         cache_read_tokens=sum(r.cache_read_tokens for r in by_model),
         cache_write_tokens=sum(r.cache_write_tokens for r in by_model),
+        web_search_requests=sum(r.web_search_requests for r in by_model),
         estimated_cost_usd=None if any(c is None for c in costs) else round(sum(costs), 6),
     )
     return UsageSummary(days=days, totals=totals, by_model=by_model)

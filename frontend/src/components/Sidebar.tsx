@@ -13,6 +13,7 @@ import {
   Search,
   Settings,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import type { Route } from "../hooks/useRoute";
@@ -92,6 +93,7 @@ export function Sidebar(props: Props) {
         <div className="border-t border-line p-2">
           <NavItem icon={<Brain size={16} />} label="Memory" active={route.view === "memory"} onClick={() => onNavigate({ view: "memory" })} />
           <NavItem icon={<ListChecks size={16} />} label="Tasks" active={route.view === "tasks"} onClick={() => onNavigate({ view: "tasks" })} />
+          <NavItem icon={<Wrench size={16} />} label="Tools" active={route.view === "tools"} onClick={() => onNavigate({ view: "tools" })} />
           <NavItem icon={<Settings size={16} />} label="Settings" active={route.view === "settings"} onClick={() => onNavigate({ view: "settings" })} />
           <div className="mt-2 flex items-center gap-2 rounded-lg px-2 py-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-arc/15 text-xs font-semibold text-arc">

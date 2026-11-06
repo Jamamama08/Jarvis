@@ -2,7 +2,7 @@
 
 A personal AI assistant powered by Claude. It runs as a **web app** in your browser and as a **Windows desktop app** (Tauri 2). Both use the same local backend, database and (from Phase 2 on) AI engine.
 
-> **Status: Phase 4 of 8 (Voice) is complete.** JARVIS chats with Claude (streamed Markdown replies, context, model/effort/length settings, cancellation, usage and cost tracking), has long-term memory you control (only memories you approve are searched and sent with relevant messages), and supports voice: speak your messages and hear replies, using the browser's free built-in speech engines. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice. See the [roadmap](#roadmap).
+> **Status: Phase 5 of 8 (Tool system) is complete.** JARVIS chats with Claude (streamed Markdown replies, context, model/effort/length settings, cancellation, usage and cost tracking), has long-term memory you control, supports voice, and can now use tools (calculator, date and time, workspace files, document summaries, your task list, memory, Python, optional web search) under a permission system that asks before anything risky. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice. See the [roadmap](#roadmap).
 
 ---
 
@@ -14,6 +14,7 @@ A personal AI assistant powered by Claude. It runs as a **web app** in your brow
 - [Desktop app (Windows)](#desktop-app-windows)
 - [Memory](#memory)
 - [Voice](#voice)
+- [Tools and permissions](#tools-and-permissions)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Security model](#security-model)
@@ -50,7 +51,8 @@ Jarvis/
 │   ├── app/
 │   │   ├── api/             HTTP routers + auth dependencies
 │   │   ├── core/            config, database, password/token security, redacting logger
-│   │   ├── services/        chat turns, Claude provider, memory engine + suggestions, prompts, pricing, backups
+│   │   ├── services/        agent loop (chat.py), Claude provider, memory engine + suggestions, prompts, pricing, backups
+│   │   ├── tools/           registry, permissions, executor (approvals, timeouts, redacted logs), built-in tools
 │   │   ├── models.py        every table in the spec (users … api_usage)
 │   │   ├── schemas.py       Pydantic request/response models
 │   │   ├── migrations.py    runs Alembic at startup
@@ -62,7 +64,7 @@ Jarvis/
 │   ├── src/
 │   │   ├── components/      Sidebar, Composer, MessageBubble, Markdown, VoiceOrb, StatusPill
 │   │   ├── voice/           VoiceProvider interface, Web Speech implementation, useVoice, speech text
-│   │   ├── views/           Auth, Chat, Memory, Settings, Roadmap (Tasks placeholder)
+│   │   ├── views/           Auth, Chat, Memory, Tasks, Tools, Settings
 │   │   ├── hooks/           useAuth, useRoute
 │   │   └── lib/             API client, SSE parser, types, formatting
 │   ├── e2e/                 Playwright end-to-end tests + a local mock of the Anthropic API
@@ -85,6 +87,8 @@ Jarvis/
 | Thinking and effort left at model defaults | Current models think adaptively. Effort is only sent when you pick one in Settings, so older models that reject it still work. |
 | Memories attached to the user turn, not the system prompt | Relevant memories are sent as a separate text block at the start of that user message and stored with it. Replayed history stays byte-identical, so prompt caching keeps working, and a memory already sent in a conversation isn't sent again. |
 | Voice in the browser behind a `VoiceProvider` interface | The free Web Speech API needs no new dependency or service. The app only talks to the recognizer/synthesizer interfaces in `frontend/src/voice/types.ts`, so a local engine (e.g. Whisper and Piper through the backend or a Tauri command) can replace it later. |
+| Manual agent loop inside the streaming turn | The SDK's tool runner can't pause an SSE stream to wait for your approval, so `services/chat.py` runs the loop itself: validate input, check permissions, ask you, run with a timeout, log, repeat. It enforces max steps, a time limit and a token budget per message. |
+| Tool exchanges stored and replayed exactly | The full exchange (including thinking blocks and tool calls/results) is saved with the reply and replayed byte-identically, which the API needs for tool use and which keeps prompt caching working. |
 | Suggestions instead of automatic memory | Claude never saves memories itself. "Suggest memories" makes one explicit request that returns pending suggestions (structured JSON output) for you to approve, edit or reject. |
 | Server-side refusal fallback | Current Claude models can decline a request via safety classifiers. With `fallbacks: "default"` the API retries it on Anthropic's recommended fallback model in the same call. On by default; `JARVIS_REFUSAL_FALLBACK=false` turns it off. |
 | Full schema in migration `0001` | Later phases add behaviour without risky table rebuilds. A test asserts the migrations match the models. |
@@ -191,6 +195,41 @@ Browser support and privacy:
 
 Voice is free; it adds no Claude cost beyond the messages themselves. Spoken replies use voices installed on your device (some browser voices are online). For fully local, offline voice input, a local engine can be added later behind the same `VoiceProvider` interface.
 
+## Tools and permissions
+
+JARVIS decides when to use a tool. Every call is validated against the tool's schema, checked against your permissions, run with a timeout, and logged with secrets redacted. Tool cards appear in the reply, and the header shows what's running or waiting for you.
+
+| Tool | Level | What it does |
+| --- | --- | --- |
+| `calculator` | automatic | Exact arithmetic and math functions (no `eval`) |
+| `current_datetime` | automatic | Current date and time, any time zone |
+| `read_file`, `search_files` | automatic | Read and search text files in the workspace folder |
+| `summarize_document` | automatic | Summarize a workspace document of any length (extra Claude requests) |
+| `create_task`, `list_tasks`, `update_task` | automatic | Your task list (see **Tasks**) |
+| `search_memories` | automatic | Search approved memories |
+| `suggest_memory` | automatic | Propose a memory; it stays pending until you approve it |
+| `write_file` | restricted | Create, overwrite or append to a workspace file |
+| `delete_task` | restricted | Delete a task |
+| `run_python` | restricted | Run a Python script in the workspace |
+| `delete_file` | sensitive | Permanently delete a workspace file |
+| `web_search`, `web_fetch` | automatic, opt-in | Anthropic-run web search and page fetch. **Paid**, so off by default |
+
+**Permissions** (the **Tools** page):
+- Defaults: automatic tools run immediately; restricted and sensitive tools ask you first. You can change each level or individual tools to *Run automatically*, *Ask me first* or *Never*.
+- Sensitive actions can never be set to run automatically.
+- When asked, you see exactly what will happen (for example the file path and content), and can **Allow**, **Deny**, or **Always allow** a restricted tool.
+- Requests you don't answer within 5 minutes are declined.
+
+**Workspace folder:** file tools and Python can only use `data/workspace` (`JARVIS_WORKSPACE_DIR`). Paths that leave it, including through `..` or symlinks, are refused. Put documents there for JARVIS to read.
+
+**Python runner:** runs in a separate process with no inherited secrets (your API key isn't visible to it), the workspace as working directory, a timeout, and output limits. On Linux and macOS it also has CPU, memory and file-size limits. It is **not** a security sandbox: code runs with your user account's permissions, which is why it needs your approval. Turn it off with `JARVIS_PYTHON_TOOL_ENABLED=false`.
+
+**Limits per message:** 10 model requests, 10 minutes, 400,000 tokens, 30 seconds per tool run (all configurable). When a limit is hit, JARVIS stops cleanly and says why.
+
+**Untrusted content:** tool results, file contents and web pages are data, never instructions; the system prompt tells Claude this, and every action still goes through the permission check no matter what a document says. Browser automation and desktop control arrive in Phase 6.
+
+**Tasks page:** your task list. JARVIS adds and updates tasks with its task tools, or you can manage them yourself. Autonomous execution of multi-step tasks is Phase 7.
+
 ## Configuration
 
 Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` prefix, except `ANTHROPIC_API_KEY`.
@@ -204,13 +243,20 @@ Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` p
 | `JARVIS_REQUEST_TIMEOUT_SECONDS` | `300` | Timeout for each Claude request |
 | `JARVIS_MAX_RETRIES` | `2` | SDK retries for rate limits, overload and network errors |
 | `JARVIS_REFUSAL_FALLBACK` | `true` | Retry safety-classifier refusals on Anthropic's recommended fallback model |
+| `JARVIS_WORKSPACE_DIR` | `data/workspace` | The only folder file tools and Python can use |
+| `JARVIS_MAX_TOOL_ITERATIONS` | `10` | Model requests per message |
+| `JARVIS_TURN_TIMEOUT_SECONDS` | `600` | Time limit per message, including tool runs and approvals |
+| `JARVIS_TURN_TOKEN_BUDGET` | `400000` | Input + output tokens per message |
+| `JARVIS_TOOL_TIMEOUT_SECONDS` | `30` | One tool run |
+| `JARVIS_APPROVAL_TIMEOUT_SECONDS` | `300` | How long an approval request waits |
+| `JARVIS_PYTHON_TOOL_ENABLED` | `true` | Offer the Python runner |
 | `JARVIS_HOST` / `JARVIS_PORT` | `127.0.0.1` / `8765` | Bind address |
 | `JARVIS_SETUP_TOKEN` | – | Required to create the first account if the host is not loopback |
 | `JARVIS_CORS_ORIGINS` | Vite + Tauri origins | JSON list of allowed browser origins |
 | `JARVIS_DATA_DIR` | `./data` | Database and backups |
 | `JARVIS_SESSION_TTL_HOURS` | `336` | Login session lifetime |
 
-User preferences (assistant name, model, effort, reply length cap, memory on/off, voice options (input, spoken replies, voice, language, rate, auto-send, hands-free), Enter-to-send) are stored per user in the database and edited on the Settings page. Settings also shows API usage (requests, tokens, cached tokens) with an estimated cost.
+User preferences (assistant name, model, effort, reply length cap, memory on/off, tools on/off, web search on/off, voice options (input, spoken replies, voice, language, rate, auto-send, hands-free), Enter-to-send) are stored per user in the database and edited on the Settings page. Settings also shows API usage (requests, tokens, cached tokens) with an estimated cost.
 
 ## Testing
 
@@ -219,11 +265,13 @@ User preferences (assistant name, model, effort, reply length cap, memory on/off
 ```
 
 That runs, in order:
-- **pytest** (`backend/tests`): auth, rate limiting, setup-token rule, conversation CRUD, ownership isolation, streaming, cancellation, persistence across restarts, backups, a migration/model drift check, log redaction, SPA serving, memory (CRUD, history, purge, exact and near duplicates, FTS search kept in sync by triggers, FTS query-injection safety, privacy between users, projects, persistence, retrieval into chat, no re-sending, pending and disabled memories never sent, suggestions with duplicate and secret filtering, approval/rejection, refusal and error handling, usage), and the Claude provider. The Claude tests run the real SDK against a mocked HTTP transport that replays the API's streaming format: request shape, history, preferences, prompt caching, refusals, mid-stream fallback, token-limit truncation, every error class, usage and cost recording, and that cancelling closes the upstream stream.
+- **pytest** (`backend/tests`): auth, rate limiting, setup-token rule, conversation CRUD, ownership isolation, streaming, cancellation, persistence across restarts, backups, a migration/model drift check, log redaction, SPA serving, memory (CRUD, history, purge, exact and near duplicates, FTS search kept in sync by triggers, FTS query-injection safety, privacy between users, projects, persistence, retrieval into chat, no re-sending, pending and disabled memories never sent, suggestions with duplicate and secret filtering, approval/rejection, refusal and error handling, usage), the Claude provider, and tools: calculator safety, workspace confinement (`..`, absolute paths, symlinks), the Python runner (no inherited secrets, timeout kill), permission resolution (sensitive can't be auto-allowed), redaction, and the agent loop through the real SDK against a mocked API. Agent-loop tests cover automatic tools with byte-identical replay (thinking signatures included), approve with "always allow", deny, deny by policy, approval timeout, cancel while waiting (the stored exchange stays valid), invalid input and unknown tools, iteration and token limits, tools off, opt-in web search (definitions, logging, search cost, replay), memory/task tools, file tools and the summarizer, log redaction and privacy, and a regression test that cancels a turn at many points and checks the reply is always saved in a final state. The Claude tests run the real SDK against a mocked HTTP transport that replays the API's streaming format: request shape, history, preferences, prompt caching, refusals, mid-stream fallback, token-limit truncation, every error class, usage and cost recording, and that cancelling closes the upstream stream.
 - **tsc + vitest** (`frontend/src/**/*.test.ts(x)`): SSE parser, routing, formatting, Composer (including the mic), MessageBubble, Markdown safety (no raw HTML, no `javascript:` links, images shown as links), and voice: Markdown-to-speech, sentence streaming that never speaks inside an open code block, the browser recognizer against a fake Web Speech API (transcripts, error messages, unsupported browsers and the desktop WebView), and `useVoice` (final text, cancel discards, spoken replies with the chosen voice, barge-in, mute, settings).
 - **Playwright** (`frontend/e2e`): two real backends serving the production build. One has no API key (setup, persistence, rename/pin/search/delete, settings, backups, sign-out). The other points `ANTHROPIC_BASE_URL` at `e2e/mock-anthropic.mjs`, a local stand-in for the API (Markdown replies, multi-turn context, stop button, model/effort settings, usage, and the memory flow: add, duplicate refusal, search, edit, history, memories sent with chat, suggestions approved and rejected, purge, projects).
 
 The voice E2E tests (`e2e/voice.spec.ts`) replace the browser's speech API with a scripted fake, because headless Chromium has no microphone or speakers. Everything above that API is the real code: speak a message, hear the reply, stop speaking, Esc cancels, mute, read aloud, hands-free listening, auto-send off, and an unsupported browser.
+
+The tools E2E tests (`e2e/tools.spec.ts`) use mock-API prompts that trigger tool calls: an automatic tool, approving a file write, declining a sensitive delete, blocking a tool on the Tools page, the activity log, and the task list.
 
 No suite calls the real Anthropic API, so tests are free and need no key.
 
@@ -266,7 +314,8 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 | Memory | Free to store and search (local SQLite). Memories sent with a message add input tokens to that request (at most ~6,000 characters, ~1,500 tokens). Each **Suggest memories** click is one Claude request. |
 | Claude API | **Paid, pay-per-token** on your Anthropic account. List prices per million input / output tokens: Opus 5.5 $4 / $20 (default), Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50, Fable 5.1 $10 / $50. Cached history is re-read at ~10% of the input price. Settings → API usage shows your tokens and an estimated cost. |
 | Voice (Phase 4) | Free: browser speech recognition and synthesis. Local engines can be added later. |
-| Web research (Phase 5) | A free option will be the default. Paid search APIs are optional, and their pricing will be stated before they are added. |
+| Tools | Free, except where noted. Tool calls add Claude tokens (each step is one request, and tool results are input tokens). `summarize_document` makes extra Claude requests for long documents. |
+| Web search (optional, off by default) | **$10 per 1,000 searches** plus tokens, billed by Anthropic; at most 5 per request. Web fetch is billed as tokens only. Included in the usage estimate. |
 | Windows code-signing certificate (Phase 8, optional) | Paid, from a third-party CA. Only needed to avoid SmartScreen warnings when you distribute the app. |
 
 ## Roadmap
@@ -275,7 +324,7 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 - [x] **Phase 2: Claude integration.** `ClaudeProvider` (official SDK, streaming), context building and trimming, prompt caching, refusal fallback, friendly error handling, usage and cost tracking, cancellation that stops generation, model/effort/length settings, safe Markdown rendering.
 - [x] **Phase 3: Persistent memory.** Memory CRUD, FTS5 search, relevant-context retrieval, duplicate prevention, history, approval flow (Claude suggestions), projects, Memory UI.
 - [x] **Phase 4: Voice.** Microphone with live transcript and level meter, speech-to-text, streamed text-to-speech, interruption (barge-in, Esc, stop), mute, hands-free conversation, voice settings, pluggable `VoiceProvider`.
-- [ ] **Phase 5: Tool system.** Registry, schemas, permission engine and approvals, execution log. First tools: calculator, date/time, files, summarizer, web research, memory, task manager, sandboxed Python.
+- [x] **Phase 5: Tool system.** Tool registry with validated schemas, permission engine (automatic/restricted/sensitive) with in-chat approvals and per-tool rules, redacted execution log, agent loop with step/time/token limits, tools for calculator, date and time, workspace files, document summarizer, task list, memory, Python, and opt-in web search. Tools and Tasks pages.
 - [ ] **Phase 6: Browser and desktop automation.** Playwright browsing, approved desktop app control through Tauri commands.
 - [ ] **Phase 7: Autonomous tasks.** Planner, sequential and parallel execution, retries, verification, cancellation, task dashboard.
 - [ ] **Phase 8: Integrations and deployment.** External services, backend sidecar in the desktop installer, packaging, remote-access guidance.

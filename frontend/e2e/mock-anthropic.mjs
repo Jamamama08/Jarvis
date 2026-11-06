@@ -44,12 +44,32 @@ http
       }));
       return;
     }
-    const last = (() => {
-      const c = body.messages.at(-1)?.content ?? "";
-      return Array.isArray(c) ? c.at(-1).text : c; // memory context arrives as an earlier block
-    })();
+    const lastContent = body.messages.at(-1)?.content ?? "";
+    const toolResults = Array.isArray(lastContent) ? lastContent.filter((b) => b.type === "tool_result") : [];
+    const last = Array.isArray(lastContent) ? (lastContent.at(-1).text ?? "") : lastContent; // memory context is an earlier block
+
+    // Tool use: specific prompts make the mock call a tool (only when tools are offered).
+    const toolNames = new Set((body.tools ?? []).map((t) => t.name));
+    const call = !toolResults.length && pickTool(String(last), toolNames);
+    if (call) {
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      const usage = { input_tokens: 80, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      res.write(frame("message_start", { type: "message_start", message: { id: "msg_tool", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage } }));
+      res.write(frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }));
+      res.write(frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "On it." } }));
+      res.write(frame("content_block_stop", { type: "content_block_stop", index: 0 }));
+      res.write(frame("content_block_start", { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: `toolu_${Date.now()}`, name: call.name, input: {} } }));
+      res.write(frame("content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) } }));
+      res.write(frame("content_block_stop", { type: "content_block_stop", index: 1 }));
+      res.write(frame("message_delta", { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 30 } }));
+      res.write(frame("message_stop", { type: "message_stop" }));
+      res.end();
+      return;
+    }
     const slow = String(last).includes("slow");
-    const reply = slow
+    const reply = toolResults.length
+      ? toolResults.map((r) => `Tool result${r.is_error ? " (error)" : ""}: ${typeof r.content === "string" ? r.content : JSON.stringify(r.content)}. `).join("").match(/.{1,12}/gs)
+      : slow
       ? Array.from({ length: 200 }, (_, i) => `word${i} `)
       : `**Acknowledged.** You said: _${last}_\n\nTurn ${body.messages.length} of this conversation.\n\n\`\`\`python\nprint("ok")\n\`\`\`\n`.match(/.{1,12}/gs);
 
@@ -70,3 +90,20 @@ http
     res.end();
   })
   .listen(port, "127.0.0.1", () => console.log(`mock anthropic on ${port}`));
+
+function pickTool(text, available) {
+  const rules = [
+    [/^calculate (.+)$/i, (m) => ({ name: "calculator", input: { expression: m[1] } })],
+    [/^save a note$/i, () => ({ name: "write_file", input: { path: "notes/todo.md", content: "Buy milk\n", mode: "create" } })],
+    [/^delete the note$/i, () => ({ name: "delete_file", input: { path: "notes/todo.md" } })],
+    [/^add task: (.+)$/i, (m) => ({ name: "create_task", input: { title: m[1] } })],
+  ];
+  for (const [re, make] of rules) {
+    const m = text.match(re);
+    if (m) {
+      const call = make(m);
+      if (available.has(call.name)) return call;
+    }
+  }
+  return null;
+}

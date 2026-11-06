@@ -60,6 +60,21 @@ class Settings(BaseSettings):
     # the API retries it on Anthropic's recommended fallback model.
     refusal_fallback: bool = True
 
+    # --- Tools & agent loop -----------------------------------------------------
+    # Files the file tools may read/write and the Python tool runs in. Nothing outside is reachable.
+    workspace_dir: Path | None = None  # default: <data_dir>/workspace
+    max_tool_iterations: int = Field(default=10, ge=1, le=50)  # model calls per user message
+    turn_timeout_seconds: float = Field(default=600.0, gt=0)  # whole turn, including tool runs
+    turn_token_budget: int = Field(default=400_000, ge=10_000)  # input + output tokens per turn
+    tool_timeout_seconds: float = Field(default=30.0, gt=0)  # one tool run
+    approval_timeout_seconds: float = Field(default=300.0, gt=0)  # waiting for you to approve
+    max_tool_output_chars: int = Field(default=20_000, ge=1_000)
+    python_tool_enabled: bool = True
+
+    @property
+    def resolved_workspace_dir(self) -> Path:
+        return (self.workspace_dir or self.data_dir / "workspace").resolve()
+
     @property
     def resolved_database_url(self) -> str:
         if self.database_url:

@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
+import anyio
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +20,14 @@ def get_settings_dep(request: Request) -> Settings:
 
 
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
-    async with request.app.state.db.sessionmaker() as session:
+    session = request.app.state.db.sessionmaker()
+    try:
         yield session
+    finally:
+        # If the client disconnects, the request is cancelled; finish closing the session anyway so
+        # the connection goes back to the pool cleanly instead of being torn down mid-close.
+        with anyio.CancelScope(shield=True):
+            await session.close()
 
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]

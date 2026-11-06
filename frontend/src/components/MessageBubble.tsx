@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, Brain, Check, CircleSlash, Copy, Info, Volume2 } from "lucide-react";
 import type { Message } from "../lib/types";
 import { Markdown } from "./Markdown";
+import { ToolActivity } from "./ToolActivity";
 import { clockTime } from "../lib/format";
 
 export function MessageBubble({ message, assistantName, onReadAloud }: { message: Message; assistantName: string; onReadAloud?: (text: string) => void }) {
@@ -43,6 +44,7 @@ export function MessageBubble({ message, assistantName, onReadAloud }: { message
           <span>{clockTime(message.created_at)}</span>
           {message.model && <span className="font-mono text-[10px]">{message.model}</span>}
         </div>
+        {message.tools && message.tools.length > 0 && <ToolActivity tools={message.tools} />}
         <div className="text-ink" data-testid="assistant-content">
           {message.content ? <Markdown text={message.content} /> : null}
           {message.status === "streaming" && <Caret />}

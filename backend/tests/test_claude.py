@@ -154,7 +154,7 @@ async def test_streams_reply_and_records_usage(claude_client, fake):
     assert usage["totals"]["requests"] == 1
     assert usage["by_model"][0] == {
         "model": "claude-opus-5-5", "requests": 1, "input_tokens": 120, "output_tokens": 30,
-        "cache_read_tokens": 80, "cache_write_tokens": 40,
+        "cache_read_tokens": 80, "cache_write_tokens": 40, "web_search_requests": 0,
         # (120*4 + 40*4*1.25 + 80*4*0.1 + 30*20) / 1e6
         "estimated_cost_usd": pytest.approx(0.001312),
     }

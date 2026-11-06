@@ -1,6 +1,9 @@
 """Async SQLAlchemy engine/session management."""
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import anyio
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -37,3 +40,22 @@ class Database:
 
     async def dispose(self) -> None:
         await self.engine.dispose()
+
+
+@asynccontextmanager
+async def shielded_session(sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncSession]:
+    """A session whose close() finishes even if the surrounding task is cancelled (client
+    disconnects), so connections return to the pool cleanly."""
+    session = sessionmaker()
+    try:
+        yield session
+    finally:
+        with anyio.CancelScope(shield=True):
+            await session.close()
+
+
+async def safe_commit(session: AsyncSession) -> None:
+    """Commit, shielded from cancellation: a commit interrupted half-way invalidates the session,
+    which would make every later write in the same session (e.g. saving a cancelled reply) fail."""
+    with anyio.CancelScope(shield=True):
+        await session.commit()

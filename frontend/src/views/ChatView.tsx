@@ -6,7 +6,7 @@ import { StatusPill } from "../components/StatusPill";
 import { VoiceOrb, type OrbState } from "../components/VoiceOrb";
 import { api } from "../lib/api";
 import { greeting } from "../lib/format";
-import type { Message, SettingsResponse, User } from "../lib/types";
+import type { Message, SettingsResponse, ToolExecution, User } from "../lib/types";
 import { useVoice, type ReplySpeaker } from "../voice/useVoice";
 
 interface Props {
@@ -100,6 +100,13 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
       let id = activeIdRef.current;
       let speaker: ReplySpeaker | null = null;
       let listenAfterReply = viaVoice && Boolean(prefsRef.current?.voice_conversation_mode);
+      let paragraphBreak = false; // text after a tool call starts a new paragraph
+      const updateStreaming = (fn: (last: Message) => Message) =>
+        setMessages((m) => {
+          const last = m[m.length - 1];
+          if (!last || last.status !== "streaming") return m;
+          return [...m.slice(0, -1), fn(last)];
+        });
       const tempId = `temp-${Date.now()}`;
       const optimistic: Message = {
         id: tempId,
@@ -147,24 +154,52 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
                 if (speaker) listenAfterReply = false; // handled when speech finishes
               }
               break;
-            case "reset":
-              // A fallback model took over mid-stream; drop the declined partial text.
+            case "reset": {
+              // A fallback model took over mid-stream (or a request is retried): drop the discarded text.
               voiceRef.current.stopSpeaking();
               speaker?.reset();
-              setMessages((m) => {
-                const last = m[m.length - 1];
-                if (!last || last.status !== "streaming") return m;
-                return [...m.slice(0, -1), { ...last, content: "" }];
-              });
+              const keep = ev.data.text ?? "";
+              updateStreaming((last) => ({ ...last, content: keep }));
+              paragraphBreak = false;
               break;
-            case "delta":
+            }
+            case "tool_start":
+              paragraphBreak = true;
+              updateStreaming((last) => ({
+                ...last,
+                tools: upsertTool(last.tools ?? [], {
+                  id: `start-${ev.data.id}`,
+                  tool_use_id: ev.data.id,
+                  tool_name: ev.data.name,
+                  status: "preparing",
+                  summary: "",
+                  permission_level: "automatic",
+                  conversation_id: id,
+                  message_id: last.id,
+                  input: null,
+                  output: null,
+                  error: null,
+                  duration_ms: null,
+                  created_at: new Date().toISOString(),
+                  finished_at: null,
+                }),
+              }));
+              break;
+            case "tool_call":
+            case "tool_result":
+              paragraphBreak = true;
+              updateStreaming((last) => ({ ...last, tools: upsertTool(last.tools ?? [], ev.data) }));
+              break;
+            case "delta": {
               speaker?.push(ev.data.text);
-              setMessages((m) => {
-                const last = m[m.length - 1];
-                if (!last || last.status !== "streaming") return m;
-                return [...m.slice(0, -1), { ...last, content: last.content + ev.data.text }];
-              });
+              const brk = paragraphBreak;
+              paragraphBreak = false;
+              updateStreaming((last) => ({
+                ...last,
+                content: last.content + (brk && last.content.trim() ? "\n\n" : "") + ev.data.text,
+              }));
               break;
+            }
             case "reply_done":
               setMessages((m) => m.map((x) => (x.id === ev.data.id ? ev.data : x)));
               if (ev.data.status === "complete") speaker?.finish();
@@ -267,6 +302,11 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
   }
 
   const lastMessage = messages[messages.length - 1];
+  const liveTools = streaming && lastMessage?.status === "streaming" ? lastMessage.tools ?? [] : [];
+  const activeTool =
+    liveTools.find((t) => t.status === "pending_approval") ??
+    liveTools.find((t) => t.status === "running" || t.status === "preparing" || t.status === "approved") ??
+    null;
   const orbState: OrbState = voice.listening
     ? "listening"
     : voice.speaking
@@ -317,7 +357,7 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
             {voice.muted ? <VolumeX size={16} className="text-ink-faint" /> : <Volume2 size={16} className="text-arc" />}
           </button>
         )}
-        <StatusPill streaming={streaming} settings={settings} />
+        <StatusPill streaming={streaming} settings={settings} activeTool={activeTool} />
       </header>
       {voice.listening && (
         <div className="flex items-center justify-center gap-3 border-b border-arc/20 bg-arc/5 py-2" role="status" aria-live="polite" data-testid="listening-banner">
@@ -416,4 +456,13 @@ export function ChatView({ conversationId, user, settings, onConversationCreated
       />
     </section>
   );
+}
+
+/** Insert or update a tool execution, matching streaming placeholders by tool_use_id. */
+export function upsertTool(list: ToolExecution[], next: ToolExecution): ToolExecution[] {
+  const i = list.findIndex((t) => t.id === next.id || (next.tool_use_id != null && t.tool_use_id === next.tool_use_id));
+  if (i === -1) return [...list, next];
+  const copy = list.slice();
+  copy[i] = { ...copy[i], ...next };
+  return copy;
 }

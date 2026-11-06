@@ -12,6 +12,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "alembic>=1.13",
     "anthropic>=2.6,<3",
+    "tzdata; sys_platform == 'win32'",  # time-zone database for the date/time tool on Windows
 ]
 
 [project.optional-dependencies]

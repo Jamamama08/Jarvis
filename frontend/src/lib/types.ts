@@ -29,6 +29,58 @@ export interface Message {
   error: string | null;
   created_at: string;
   memory_ids: string[];
+  tools?: ToolExecution[];
+}
+
+export type ToolStatus = "preparing" | "pending_approval" | "approved" | "denied" | "running" | "succeeded" | "failed" | "cancelled";
+export type PermissionLevel = "automatic" | "restricted" | "sensitive";
+export type Decision = "allow" | "ask" | "deny";
+
+export interface ToolExecution {
+  id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  tool_use_id: string | null;
+  tool_name: string;
+  permission_level: PermissionLevel;
+  status: ToolStatus;
+  summary: string;
+  input: Record<string, unknown> | null;
+  output: string | null;
+  error: string | null;
+  duration_ms: number | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface ToolInfo {
+  name: string;
+  description: string;
+  level: PermissionLevel;
+  decision: Decision;
+  rule: "tool" | "level" | "default";
+  enabled: boolean;
+  server: boolean;
+}
+
+export interface ToolsOverview {
+  tools: ToolInfo[];
+  levels: { level: PermissionLevel; decision: Decision; is_default: boolean }[];
+  workspace_dir: string;
+  tools_enabled: boolean;
+  web_search_enabled: boolean;
+  limits: Record<string, number>;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  conversation_id: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
 }
 
 export interface ConversationSummary {
@@ -56,6 +108,8 @@ export interface Preferences {
   max_output_tokens: number;
   effort: Effort;
   memory_enabled: boolean;
+  tools_enabled: boolean;
+  web_search_enabled: boolean;
   voice_input_enabled: boolean;
   speak_responses: boolean;
   voice_name: string;
@@ -84,6 +138,7 @@ export interface UsageRow {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  web_search_requests: number;
   estimated_cost_usd: number | null;
 }
 
@@ -120,7 +175,10 @@ export type StreamEvent =
   | { event: "conversation"; data: { id: string; title: string } }
   | { event: "reply_start"; data: Message }
   | { event: "delta"; data: { text: string } }
-  | { event: "reset"; data: Record<string, never> }
+  | { event: "reset"; data: { text?: string } }
+  | { event: "tool_start"; data: { id: string; name: string; server: boolean } }
+  | { event: "tool_call"; data: ToolExecution }
+  | { event: "tool_result"; data: ToolExecution }
   | { event: "reply_done"; data: Message };
 
 export type MemoryCategory = "preference" | "personal" | "project" | "progress" | "knowledge" | "conversation";

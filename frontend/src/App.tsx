@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ListChecks, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 import { useRoute } from "./hooks/useRoute";
@@ -8,7 +8,8 @@ import type { ConversationSummary, SettingsResponse, User } from "./lib/types";
 import { AuthScreen } from "./views/AuthScreen";
 import { ChatView } from "./views/ChatView";
 import { MemoryView } from "./views/MemoryView";
-import { RoadmapView } from "./views/RoadmapView";
+import { TasksView } from "./views/TasksView";
+import { ToolsView } from "./views/ToolsView";
 import { SettingsView } from "./views/SettingsView";
 
 export default function App() {
@@ -116,20 +117,9 @@ function Shell({ user }: { user: User }) {
           <MemoryView onOpenSidebar={openSidebar} onOpenConversation={(id) => navigate({ view: "chat", conversationId: id })} />
         )}
         {route.view === "tasks" && (
-          <RoadmapView
-            title="Tasks"
-            icon={<ListChecks size={20} />}
-            phase={7}
-            onOpenSidebar={openSidebar}
-            summary="A dashboard for multi-step work JARVIS plans and executes on your behalf."
-            features={[
-              "Execution plans broken into steps, with live progress",
-              "Approval prompts for restricted and sensitive actions",
-              "Retry, cancel and full execution history",
-              "Tool activity log (Phase 5)",
-            ]}
-          />
+          <TasksView onOpenSidebar={openSidebar} onOpenConversation={(id) => navigate({ view: "chat", conversationId: id })} />
         )}
+        {route.view === "tools" && <ToolsView settings={settings} onSettingsChanged={setSettings} onOpenSidebar={openSidebar} />}
       </main>
     </div>
   );

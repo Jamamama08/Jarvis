@@ -6,14 +6,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbSession
-from app.models import Conversation, Message
+from app.models import Conversation, Message, ToolExecution
 from app.schemas import (
     ConversationCreate,
     ConversationDetail,
     ConversationSummary,
     ConversationUpdate,
     MessageCreate,
+    ToolExecutionOut,
 )
+from app.tools.executor import to_out
 from app.services.chat import DEFAULT_TITLE, run_turn
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -95,8 +97,23 @@ async def create_conversation(body: ConversationCreate, user: CurrentUser, db: D
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)
-async def get_conversation(conversation_id: str, user: CurrentUser, db: DbSession) -> Conversation:
-    return await _get_owned(db, user.id, conversation_id, with_messages=True)
+async def get_conversation(conversation_id: str, user: CurrentUser, db: DbSession) -> ConversationDetail:
+    conversation = await _get_owned(db, user.id, conversation_id, with_messages=True)
+    detail = ConversationDetail.model_validate(conversation)
+    executions = (
+        await db.execute(
+            select(ToolExecution)
+            .where(ToolExecution.conversation_id == conversation_id, ToolExecution.user_id == user.id)
+            .order_by(ToolExecution.created_at)
+        )
+    ).scalars()
+    by_message: dict[str, list] = {}
+    for ex in executions:
+        if ex.message_id:
+            by_message.setdefault(ex.message_id, []).append(ToolExecutionOut.model_validate(to_out(ex, summary=(ex.input or {}).get("_summary", ""))))
+    for message in detail.messages:
+        message.tools = by_message.get(message.id, [])
+    return detail
 
 
 @router.patch("/{conversation_id}", response_model=ConversationSummary)
@@ -149,6 +166,8 @@ async def send_message(
         user_id=user.id,
         conversation_id=conversation_id,
         content=body.content,
+        tools=request.app.state.tools,
+        approvals=request.app.state.approvals,
     )
     return StreamingResponse(
         stream,

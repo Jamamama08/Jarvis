@@ -9,6 +9,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 import anyio
@@ -16,12 +17,39 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.models import ApiUsage, Conversation, Message, MessageRole, MessageStatus, User
+from app.core.db import safe_commit, shielded_session
+from app.models import (
+    ApiUsage,
+    Conversation,
+    Message,
+    MessageRole,
+    MessageStatus,
+    PermissionDecision,
+    PermissionLevel,
+    ToolExecution,
+    ToolExecutionStatus,
+    User,
+)
 from app.schemas import MessageOut
 from app.services.memory import build_memory_context
 from app.services.preferences import load_preferences
 from app.services.prompts import build_system_prompt
-from app.services.providers import ChatProvider, ChatTurn, Completed, ProviderError, Started, TextDelta, TextReset
+from app.services.providers import (
+    ChatProvider,
+    ChatTurn,
+    Completed,
+    ProviderError,
+    ProviderJSONError,
+    Started,
+    TextDelta,
+    TextReset,
+    ToolUseStart,
+)
+from app.tools import executor, permissions
+from app.tools.base import ToolContext
+from app.tools.executor import ApprovalBroker
+from app.tools.registry import ToolRegistry
+from app.tools.server_tools import describe_server_result, web_tool_definitions
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +123,7 @@ async def _history(db: AsyncSession, conversation_id: str) -> list[ChatTurn]:
     ).scalars()
     turns = []
     for m in rows:
-        if not m.content.strip():
+        if not m.content.strip() and not (isinstance(m.blocks, dict) and m.blocks.get("exchange")):
             continue
         blocks = m.blocks if isinstance(m.blocks, dict) else {}
         turns.append(
@@ -104,6 +132,7 @@ async def _history(db: AsyncSession, conversation_id: str) -> list[ChatTurn]:
                 content=m.content,
                 context=blocks.get("memory_context") or None,
                 memory_ids=tuple(m.memory_ids),
+                exchange=blocks.get("exchange") or None,
             )
         )
     return turns
@@ -122,7 +151,7 @@ def trim_history(turns: list[ChatTurn], max_tokens: int) -> list[ChatTurn]:
     kept: list[ChatTurn] = []
     used = 0
     for turn in reversed(turns):
-        cost = len(turn.content) + len(turn.context or "")
+        cost = turn.size()
         if kept and used + cost > budget:
             break
         kept.append(turn)
@@ -134,7 +163,7 @@ def trim_history(turns: list[ChatTurn], max_tokens: int) -> list[ChatTurn]:
 
 
 def _usage_row(completed: Completed | None, started: Started | None, parts: list[str], configured: bool) -> dict | None:
-    """Usage to record for a turn. Billed tokens are recorded even when a reply is cancelled or
+    """Usage to record for one model request. Billed tokens are recorded even when a reply is cancelled or
     fails mid-stream: input tokens are exact (from message_start); output is then estimated."""
     if not configured:
         return None
@@ -145,6 +174,7 @@ def _usage_row(completed: Completed | None, started: Started | None, parts: list
             "output_tokens": completed.output_tokens,
             "cache_read_tokens": completed.cache_read_tokens,
             "cache_write_tokens": completed.cache_write_tokens,
+            "web_search_requests": completed.web_search_requests,
         }
     if started:
         return {
@@ -157,6 +187,34 @@ def _usage_row(completed: Completed | None, started: Started | None, parts: list
     return None
 
 
+def _tokens(usage: dict) -> int:
+    return usage["input_tokens"] + usage["output_tokens"] + usage["cache_read_tokens"] + usage["cache_write_tokens"]
+
+
+def close_exchange(exchange: list[dict], reason: str) -> None:
+    """Make a stored exchange valid to replay: every tool_use must have a tool_result."""
+    if not exchange or exchange[-1]["role"] != "assistant":
+        return
+    pending = [b["id"] for b in exchange[-1]["content"] if isinstance(b, dict) and b.get("type") == "tool_use"]
+    if pending:
+        exchange.append({
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": reason} for tid in pending],
+        })
+
+
+def _joined(parts: list[list[str]]) -> str:
+    return "\n\n".join(t for t in ("".join(p).strip() for p in parts) if t)
+
+
+@dataclass
+class TurnState:
+    """Mutable state of one agent turn, shared with the tool-call helper."""
+
+    cancelled: bool = False
+    tokens_used: int = 0
+
+
 async def run_turn(
     *,
     sessionmaker: async_sessionmaker[AsyncSession],
@@ -167,10 +225,21 @@ async def run_turn(
     user_id: str,
     conversation_id: str,
     content: str,
+    tools: ToolRegistry | None = None,
+    approvals: ApprovalBroker | None = None,
 ) -> AsyncIterator[str]:
-    """Async generator of SSE frames for one user turn. Caller must have called registry.start()."""
+    """Async generator of SSE frames for one user turn: the agent loop.
+
+    Each iteration streams one model request. If Claude calls tools, each call is validated,
+    checked against the user's permissions (pausing for approval when needed), executed with a
+    timeout and logged; the results go back to Claude. The loop ends when Claude answers without
+    calling tools, or when a limit (iterations, wall-clock time, token budget) is reached.
+    Caller must have called registry.start().
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.turn_timeout_seconds
     try:
-        async with sessionmaker() as db:
+        async with shielded_session(sessionmaker) as db:
             conversation = await db.get(Conversation, conversation_id)
             user = await db.get(User, user_id)
             prefs = await load_preferences(db, user_id)
@@ -192,7 +261,7 @@ async def run_turn(
                 conversation.title = title_from(content)
             conversation.updated_at = datetime.now(UTC)
             await db.flush()
-            history = await _history(db, conversation_id)
+            history = trim_history(await _history(db, conversation_id), settings.max_context_tokens)
 
             reply = Message(
                 conversation_id=conversation_id,
@@ -203,77 +272,322 @@ async def run_turn(
                 model=model if provider.configured else None,
             )
             db.add(reply)
-            await db.commit()
+            await safe_commit(db)
 
             yield sse("user_message", MessageOut.model_validate(user_msg).model_dump(mode="json"))
             yield sse("conversation", {"id": conversation.id, "title": conversation.title})
             yield sse("reply_start", MessageOut.model_validate(reply).model_dump(mode="json"))
 
-            parts: list[str] = []
+            use_tools = bool(tools) and prefs.tools_enabled and provider.configured
+            tool_defs: list[dict] = tools.definitions(settings) if use_tools else []
+            if provider.configured and prefs.web_search_enabled:
+                tool_defs = tool_defs + web_tool_definitions(model)
+            system = build_system_prompt(
+                prefs, user.display_name or user.username, date.today(),
+                tools_enabled=use_tools, web_search=provider.configured and prefs.web_search_enabled,
+            )
+
+            state = TurnState()
+            parts: list[list[str]] = []  # displayed text, one list per model request
+            exchange: list[dict] = []  # API messages produced during this turn (for replay)
+            used_tools = False
             final_status = MessageStatus.complete
             error: str | None = None
-            completed: Completed | None = None
-            started: Started | None = None
+            notice: str | None = None
+            last: Completed | None = None
+            iteration = 0
+            json_retries = 0
             try:
-                system = build_system_prompt(prefs, user.display_name or user.username, date.today())
-                events = provider.stream(
-                    trim_history(history, settings.max_context_tokens),
-                    model=model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    effort=prefs.effort or None,
-                )
-                # aclosing() closes the upstream HTTP stream immediately on cancel, so no more tokens are billed.
-                async with contextlib.aclosing(events):
-                    async for event in events:
-                        if cancel_event.is_set():
-                            final_status = MessageStatus.cancelled
-                            break
-                        if isinstance(event, TextDelta):
-                            parts.append(event.text)
-                            yield sse("delta", {"text": event.text})
-                        elif isinstance(event, TextReset):
-                            parts.clear()
-                            yield sse("reset", {})
-                        elif isinstance(event, Started):
-                            started = event
-                        elif isinstance(event, Completed):
-                            completed = event
+                while True:
+                    if iteration >= settings.max_tool_iterations:
+                        notice = f"Stopped after {iteration} steps (the limit per message). Ask me to continue if needed."
+                        break
+                    if loop.time() >= deadline:
+                        notice = "Stopped because this message hit the time limit."
+                        break
+                    iteration += 1
+                    iter_parts: list[str] = []
+                    parts.append(iter_parts)
+                    completed: Completed | None = None
+                    started: Started | None = None
+                    try:
+                        events = provider.stream(
+                            history, model=model, max_tokens=max_tokens, system=system,
+                            effort=prefs.effort or None, tools=tool_defs or None, tail=exchange,
+                        )
+                        # aclosing() closes the upstream HTTP stream immediately on cancel, so no more tokens are billed.
+                        async with contextlib.aclosing(events):
+                            async for event in events:
+                                if cancel_event.is_set():
+                                    state.cancelled = True
+                                    break
+                                if isinstance(event, TextDelta):
+                                    iter_parts.append(event.text)
+                                    yield sse("delta", {"text": event.text})
+                                elif isinstance(event, TextReset):
+                                    iter_parts.clear()
+                                    yield sse("reset", {"text": _joined(parts[:-1])})
+                                elif isinstance(event, ToolUseStart):
+                                    yield sse("tool_start", {"id": event.id, "name": event.name, "server": event.server})
+                                elif isinstance(event, Started):
+                                    started = event
+                                elif isinstance(event, Completed):
+                                    completed = event
+                    except ProviderJSONError:
+                        # A streamed tool input was unparseable; nothing ran. Re-issue the request (bounded).
+                        await _record_usage(db, user_id, conversation_id, reply.id, _usage_row(None, started, iter_parts, True), state)
+                        parts.pop()
+                        json_retries += 1
+                        if json_retries > 2:
+                            raise ProviderError("Claude produced an unreadable tool request several times. Try rephrasing.")
+                        yield sse("reset", {"text": _joined(parts)})
+                        continue
+                    finally:
+                        if completed is not None or state.cancelled:
+                            await _record_usage(db, user_id, conversation_id, reply.id, _usage_row(completed, started, iter_parts, provider.configured), state)
+
+                    if state.cancelled:
+                        break
+                    last = completed
+                    if completed is None:
+                        raise ProviderError("The response ended unexpectedly.")
+                    if completed.stop_reason == "refusal":
+                        break  # handled at finalisation: partial output is discarded
+                    if not provider.configured:
+                        break
+                    exchange.append({"role": "assistant", "content": completed.content})
+                    if completed.content and any(b.get("type") == "server_tool_use" for b in completed.content):
+                        used_tools = True
+                        async for frame in _log_server_tools(sessionmaker, user_id, conversation_id, reply.id, completed.content):
+                            yield frame
+                    if completed.stop_reason == "pause_turn":
+                        continue  # a server tool paused the turn; re-send to resume
+                    tool_uses = [b for b in completed.content if b.get("type") == "tool_use"]
+                    if completed.stop_reason != "tool_use" or not tool_uses:
+                        if completed.stop_reason == "max_tokens":
+                            notice = "Reached the maximum output length, so this response may be cut off."
+                        break
+                    used_tools = True
+                    results: list[dict] = []
+                    for block in tool_uses:
+                        holder: dict = {}
+                        async for frame in _tool_call(
+                            block, holder, state=state, sessionmaker=sessionmaker, settings=settings, provider=provider,
+                            tools=tools, approvals=approvals, cancel_event=cancel_event, user_id=user_id,
+                            conversation_id=conversation_id, message_id=reply.id, model=model, usage_db=db,
+                        ):
+                            yield frame
+                        results.append(holder["result"])
+                    exchange.append({"role": "user", "content": results})
+                    if state.cancelled:
+                        break
+                    if state.tokens_used >= settings.turn_token_budget:
+                        notice = f"Stopped because this message used its token budget ({settings.turn_token_budget:,} tokens)."
+                        break
             except (asyncio.CancelledError, anyio.get_cancelled_exc_class()):
-                final_status = MessageStatus.cancelled
+                state.cancelled = True
                 raise
             except ProviderError as exc:
                 final_status = MessageStatus.error
                 error = exc.user_message
             except Exception:  # unexpected failure: log it, persist a generic error, keep the stream alive
-                log.exception("Provider error in conversation %s", conversation_id)
+                log.exception("Agent loop error in conversation %s", conversation_id)
                 final_status = MessageStatus.error
                 error = "Unexpected error while generating the response."
             finally:
                 # Shield persistence from client-disconnect cancellation.
                 with anyio.CancelScope(shield=True):
-                    reply.content = "".join(parts)
-                    if completed:
-                        if completed.model:
-                            reply.model = completed.model
-                        if completed.stop_reason == "refusal":
-                            # Partial output from a declined request must not be kept or replayed.
-                            final_status = MessageStatus.error
-                            reply.content = ""
-                            category = f" (category: {completed.refusal_category})" if completed.refusal_category else ""
-                            error = f"Claude declined to respond to this request{category}."
-                        elif completed.stop_reason == "max_tokens":
-                            error = "Reached the maximum output length, so this response may be cut off."
-                        reply.input_tokens = completed.input_tokens or None
-                        reply.output_tokens = completed.output_tokens or None
+                    if state.cancelled:
+                        final_status = MessageStatus.cancelled
+                    reply.content = _joined(parts)
+                    if last and last.model:
+                        reply.model = last.model
+                    if last and last.stop_reason == "refusal" and not state.cancelled:
+                        # Output from a declined request must not be kept or replayed.
+                        final_status = MessageStatus.error
+                        reply.content = ""
+                        exchange = []
+                        category = f" (category: {last.refusal_category})" if last.refusal_category else ""
+                        error = f"Claude declined to respond to this request{category}."
+                    if final_status == MessageStatus.complete and notice:
+                        error = notice
+                    if used_tools and exchange:
+                        close_exchange(exchange, "Cancelled: the turn ended before this tool ran.")
+                        reply.blocks = {"exchange": exchange}
+                    if last:
+                        reply.input_tokens = last.input_tokens or None
+                        reply.output_tokens = last.output_tokens or None
                     reply.status = final_status
                     reply.error = error
                     conversation.updated_at = datetime.now(UTC)
-                    usage = _usage_row(completed, started, parts, provider.configured)
-                    if usage:
-                        db.add(ApiUsage(user_id=user_id, conversation_id=conversation_id, message_id=reply.id, **usage))
-                    await db.commit()
+                    await safe_commit(db)
 
-            yield sse("reply_done", MessageOut.model_validate(reply).model_dump(mode="json"))
+            done = MessageOut.model_validate(reply).model_dump(mode="json")
+            done["tools"] = await _message_tools(db, reply.id)
+            yield sse("reply_done", done)
     finally:
         registry.finish(conversation_id)
+
+
+async def _record_usage(db: AsyncSession, user_id: str, conversation_id: str, message_id: str, usage: dict | None, state: TurnState) -> None:
+    if not usage:
+        return
+    state.tokens_used += _tokens(usage)
+    db.add(ApiUsage(user_id=user_id, conversation_id=conversation_id, message_id=message_id, **usage))
+    await safe_commit(db)
+
+
+async def _message_tools(db: AsyncSession, message_id: str) -> list[dict]:
+    rows = (
+        await db.execute(select(ToolExecution).where(ToolExecution.message_id == message_id).order_by(ToolExecution.created_at))
+    ).scalars()
+    return [executor.to_out(r, summary=(r.input or {}).get("_summary", "")) for r in rows]
+
+
+async def _log_server_tools(sessionmaker, user_id: str, conversation_id: str, message_id: str, content: list[dict]) -> AsyncIterator[str]:
+    """Record Anthropic-run web search/fetch calls in the activity log and show them in the UI."""
+    results = {b.get("tool_use_id"): b for b in content if str(b.get("type", "")).endswith("_tool_result")}
+    async with shielded_session(sessionmaker) as tdb:
+        for block in content:
+            if block.get("type") != "server_tool_use":
+                continue
+            result = results.get(block.get("id"))
+            ok, text = describe_server_result(result) if result else (False, "No result returned.")
+            summary = str((block.get("input") or {}).get("query") or (block.get("input") or {}).get("url") or block.get("name"))
+            ex = ToolExecution(
+                user_id=user_id, conversation_id=conversation_id, message_id=message_id, tool_use_id=block.get("id"),
+                tool_name=str(block.get("name")), permission_level=PermissionLevel.automatic,
+                status=ToolExecutionStatus.succeeded if ok else ToolExecutionStatus.failed,
+                input={**executor.log_input(block.get("input") or {}), "_summary": summary[:200]},
+                output=executor.log_output(text) if ok else None, error=None if ok else text,
+                duration_ms=None, finished_at=datetime.now(UTC),
+            )
+            tdb.add(ex)
+            await safe_commit(tdb)
+            yield sse("tool_result", executor.to_out(ex, summary=summary[:200]))
+
+
+async def _tool_call(
+    block: dict,
+    holder: dict,
+    *,
+    state: TurnState,
+    sessionmaker,
+    settings: Settings,
+    provider: ChatProvider,
+    tools: ToolRegistry,
+    approvals: ApprovalBroker | None,
+    cancel_event: asyncio.Event,
+    user_id: str,
+    conversation_id: str,
+    message_id: str,
+    model: str,
+    usage_db: AsyncSession,
+) -> AsyncIterator[str]:
+    """Validate, authorise, run and log one tool call. Puts the tool_result block in holder['result']."""
+    tool_use_id, name, raw = block["id"], block.get("name", ""), block.get("input")
+    tool = tools.get(name)
+    if tool is not None and not tool.enabled(settings):
+        tool = None
+    prep = executor.prepare(tool, name, raw)
+
+    def result(text: str, is_error: bool) -> None:
+        holder["result"] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text, "is_error": is_error}
+
+    async with shielded_session(sessionmaker) as tdb:
+        execution = ToolExecution(
+            user_id=user_id, conversation_id=conversation_id, message_id=message_id, tool_use_id=tool_use_id,
+            tool_name=name[:100], permission_level=tool.level if tool else PermissionLevel.automatic,
+            status=ToolExecutionStatus.running, input={**(executor.log_input(raw) or {}), "_summary": prep.summary},
+        )
+        tdb.add(execution)
+
+        async def emit(event: str) -> str:
+            await safe_commit(tdb)
+            return sse(event, executor.to_out(execution, summary=prep.summary))
+
+        if prep.error:
+            executor.finished(execution, ToolExecutionStatus.failed)
+            execution.error = prep.error
+            result(prep.error, True)
+            yield await emit("tool_result")
+            return
+
+        decision = permissions.resolve(tool, await permissions.load_policies(tdb, user_id))
+        if decision == PermissionDecision.deny:
+            executor.finished(execution, ToolExecutionStatus.denied)
+            execution.error = "Blocked by your permission settings."
+            result(f"The user's permission settings block {tool.name}. Don't retry it; explain what you would have done.", True)
+            yield await emit("tool_result")
+            return
+
+        if decision == PermissionDecision.ask:
+            execution.status = ToolExecutionStatus.pending_approval
+            yield await emit("tool_call")
+            if approvals is None:
+                outcome = {"approve": False}
+            else:
+                future = approvals.register(execution.id, user_id)
+                cancel_wait = asyncio.ensure_future(cancel_event.wait())
+                try:
+                    done, _ = await asyncio.wait({future, cancel_wait}, timeout=settings.approval_timeout_seconds, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    cancel_wait.cancel()
+                    approvals.discard(execution.id)
+                if future in done and not future.cancelled():
+                    outcome = future.result()
+                elif cancel_wait in done or cancel_event.is_set():
+                    outcome = {"cancelled": True}
+                else:
+                    outcome = {"timeout": True}
+            if outcome.get("cancelled"):
+                state.cancelled = True
+                executor.finished(execution, ToolExecutionStatus.cancelled)
+                execution.error = "Cancelled before approval."
+                result("The user stopped the response before approving this action.", True)
+                yield await emit("tool_result")
+                return
+            if not outcome.get("approve"):
+                executor.finished(execution, ToolExecutionStatus.denied)
+                execution.error = "Approval timed out." if outcome.get("timeout") else "Declined by you."
+                result(
+                    f"The user did not approve {tool.name}"
+                    + (" (no answer in time)" if outcome.get("timeout") else "")
+                    + ". Don't retry the same action unless they ask; offer an alternative or explain.",
+                    True,
+                )
+                yield await emit("tool_result")
+                return
+            if outcome.get("remember") and tool.level == PermissionLevel.restricted:
+                await permissions.set_policy(tdb, user_id, permissions.tool_scope(tool.name), PermissionDecision.allow, level=tool.level)
+            execution.status = ToolExecutionStatus.approved
+
+        execution.status = ToolExecutionStatus.running
+        yield await emit("tool_call")
+
+        async def record(usage: Completed) -> None:
+            row = _usage_row(usage, None, [], True)
+            await _record_usage(usage_db, user_id, conversation_id, message_id, row, state)
+
+        # Each tool gets its own session so a failing tool can't break the turn's persistence.
+        async with shielded_session(sessionmaker) as tool_session:
+            ctx = ToolContext(
+                db=tool_session, user_id=user_id, conversation_id=conversation_id, settings=settings,
+                provider=provider, model=model, record_usage=record,
+            )
+            ok, output, duration = await executor.run(
+                tool, ctx, prep.args, default_timeout=settings.tool_timeout_seconds, output_limit=settings.max_tool_output_chars
+            )
+            if ok:
+                await safe_commit(tool_session)
+            else:
+                await tool_session.rollback()
+        execution.duration_ms = duration
+        if ok:
+            executor.finished(execution, ToolExecutionStatus.succeeded)
+            execution.output = executor.log_output(output)
+        else:
+            executor.finished(execution, ToolExecutionStatus.failed)
+            execution.error = executor.log_output(output)
+        result(output, not ok)
+        yield await emit("tool_result")

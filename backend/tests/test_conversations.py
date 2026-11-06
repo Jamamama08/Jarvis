@@ -97,7 +97,7 @@ async def test_cancel_marks_reply_cancelled(app, auth_client):
         output_role = "assistant"
         configured = True
 
-        async def stream(self, history, *, model, max_tokens, system, effort=None):
+        async def stream(self, history, *, model, max_tokens, system, effort=None, **kwargs):
             yield TextDelta("partial")
             started.set()
             for _ in range(200):
@@ -131,7 +131,7 @@ async def test_provider_error_is_persisted(app, auth_client):
         output_role = "assistant"
         configured = True
 
-        async def stream(self, history, *, model, max_tokens, system, effort=None):
+        async def stream(self, history, *, model, max_tokens, system, effort=None, **kwargs):
             raise RuntimeError("upstream exploded")
             yield  # pragma: no cover
 

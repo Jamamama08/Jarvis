@@ -70,6 +70,7 @@ class MessageOut(ORMModel):
     error: str | None
     created_at: datetime
     memory_ids: list[str] = []
+    tools: list["ToolExecutionOut"] = []
 
 
 class ConversationSummary(ORMModel):
@@ -141,6 +142,8 @@ class UserPreferences(BaseModel):
     max_output_tokens: int = Field(default=0, ge=0, le=128_000)  # 0 = server default
     effort: Effort = ""  # "" = the model's default effort
     memory_enabled: bool = True  # send relevant approved memories with each message
+    tools_enabled: bool = True  # let Claude use tools (subject to permissions)
+    web_search_enabled: bool = False  # Anthropic web search/fetch: paid per search, so opt-in
     voice_input_enabled: bool = True
     speak_responses: bool = False
     voice_name: str = Field(default="", max_length=200)
@@ -158,6 +161,8 @@ class UserPreferencesUpdate(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=0, le=128_000)
     effort: Effort | None = None
     memory_enabled: bool | None = None
+    tools_enabled: bool | None = None
+    web_search_enabled: bool | None = None
     voice_input_enabled: bool | None = None
     speak_responses: bool | None = None
     voice_name: str | None = Field(default=None, max_length=200)
@@ -209,6 +214,7 @@ class UsageRow(BaseModel):
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+    web_search_requests: int = 0
     estimated_cost_usd: float | None
 
 
@@ -299,3 +305,84 @@ class ProjectUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     status: ProjectStatus | None = None
     progress_notes: str | None = Field(default=None, max_length=20000)
+
+
+# --- Tools ----------------------------------------------------------------------------
+
+
+class ToolExecutionOut(ORMModel):
+    id: str
+    conversation_id: str | None
+    message_id: str | None
+    tool_use_id: str | None = None
+    tool_name: str
+    permission_level: str
+    status: str
+    summary: str = ""
+    input: dict | None
+    output: str | None
+    error: str | None
+    duration_ms: int | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class ToolDecision(BaseModel):
+    approve: bool
+    #: Also allow this tool automatically from now on (restricted tools only).
+    remember: bool = False
+
+
+class ToolInfo(BaseModel):
+    name: str
+    description: str
+    level: str
+    decision: Literal["allow", "ask", "deny"]
+    rule: Literal["tool", "level", "default"]
+    enabled: bool
+    server: bool = False
+
+
+class PermissionLevelInfo(BaseModel):
+    level: str
+    decision: Literal["allow", "ask", "deny"]
+    is_default: bool
+
+
+class ToolsOverview(BaseModel):
+    tools: list[ToolInfo]
+    levels: list[PermissionLevelInfo]
+    workspace_dir: str
+    tools_enabled: bool
+    web_search_enabled: bool
+    limits: dict[str, float]
+
+
+class PolicyUpdate(BaseModel):
+    scope: str = Field(pattern=r"^(tool:[a-z0-9_]{1,64}|level:(automatic|restricted|sensitive))$")
+    decision: Literal["allow", "ask", "deny"] | None  # None removes the rule
+
+
+class TaskOut(ORMModel):
+    id: str
+    title: str
+    description: str
+    status: str
+    conversation_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
+
+
+class TaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=4000)
+
+
+class TaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=4000)
+    status: Literal["pending", "completed", "cancelled"] | None = None
+
+
+MessageOut.model_rebuild()

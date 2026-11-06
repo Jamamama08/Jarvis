@@ -4,7 +4,7 @@ JARVIS is a personal AI assistant with a web app and a Windows desktop app (Taur
 
 ## Current phase
 
-**Phases 1-4 (Foundation, Claude integration, Persistent memory, Voice) are complete. Phase 5 (Tool system) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+**Phases 1-5 (Foundation, Claude integration, Persistent memory, Voice, Tool system) are complete. Phase 6 (Browser and desktop automation) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
 
 ## Layout
 
@@ -71,9 +71,16 @@ cd frontend && npx vite build && npx playwright test --trace off
 - E2E voice tests fake the Web Speech API in the page (`e2e/voice.spec.ts`); the code above it is real.
 - Voice preferences: `voice_input_enabled`, `speak_responses`, `voice_name`, `speech_rate`, `voice_provider` (only `"browser"`), `voice_language` (BCP 47), `voice_auto_send`, `voice_conversation_mode`. Mute is per device (localStorage).
 
-## Phase 5 entry points
+## Tool system notes
 
-- Tables `tool_executions` and `permissions` exist. Build a registry where each tool has a name, description, Pydantic input schema, permission level, handler, error handling and redacted logging (rule 3), and an agent loop with iteration, timeout and token limits (rule 4).
-- On `claude-opus-5-5` and other current models, forced `tool_choice` (`any`/`tool`) returns a 400: use `auto`. Read the claude-api skill's tool-use docs before writing the loop (streaming with tools, `eager_input_streaming`, validating inputs before running).
-- Memory search/creation tools must keep the approval rule: a tool may *suggest* a memory (pending), never approve one.
-- The chat header's "No tools active" indicator and the Tasks roadmap page are placeholders for this phase.
+- `app/tools/`: `base.py` (`Tool`, `ToolContext`, `ToolError`), `registry.py` (sorted definitions = stable cache prefix), `permissions.py` (tool rule > level rule > default; sensitive never auto-allowed), `executor.py` (validation, `ApprovalBroker`, timeouts, redacted logging), `builtin/` (the tools), `server_tools.py` (Anthropic web search/fetch, opt-in).
+- New tool: add a `Tool` in `builtin/`, list it in `builtin/__init__.py`. Write the description for Claude, saying *when* to use it. Raise `ToolError` for expected failures. Pick the level honestly (changes = restricted, irreversible = sensitive). File access must go through `files.resolve_path`. Add tests.
+- The agent loop lives in `services/chat.py` (`run_turn`, `_tool_call`). Every commit there must use `safe_commit` and sessions `shielded_session`: a cancellation that lands mid-commit invalidates the session (regression test `test_disconnect_at_any_point_still_saves_a_final_state`).
+- The reply stores the full exchange in `Message.blocks["exchange"]` (dumped content blocks, thinking signatures included) and `close_exchange` guarantees every `tool_use` has a `tool_result`. Never rewrite stored exchanges.
+- Tools are sent with `eager_input_streaming: true`; inputs are validated with Pydantic before running, and `ProviderJSONError` re-issues the request (bounded). Forced `tool_choice` is a 400 on current models: never send it.
+- Tool output is truncated (`max_tool_output_chars`) for Claude, and redacted + truncated for the log. The Python runner gets a scrubbed environment; keep it that way.
+
+## Phase 6 entry points
+
+- Browser automation: Playwright (already a dev dependency on the frontend; add the Python package to the backend if used there) behind new tools, restricted by default. Page content is untrusted data. Block private-network URLs unless the user allows them.
+- Desktop control: explicit Tauri commands for an allow-list of approved apps, each mirrored by a backend tool so the permission system and logging apply. The desktop app still needs the backend running separately (sidecar is Phase 8).

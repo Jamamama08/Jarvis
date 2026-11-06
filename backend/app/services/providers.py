@@ -9,7 +9,7 @@ system notice instead of an AI reply.
 import json
 import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import anthropic
@@ -26,14 +26,25 @@ class ChatTurn:
     #: Memory context attached to a user turn (sent as a separate block before the text).
     context: str | None = None
     memory_ids: tuple[str, ...] = ()
+    #: For an assistant turn that used tools: the exact API messages of the exchange
+    #: (assistant content blocks, user tool_result blocks, ...), replayed verbatim.
+    exchange: list[dict] | None = None
 
-    def to_param(self) -> dict:
+    def to_params(self) -> list[dict]:
+        if self.exchange:
+            return self.exchange
         if self.context:
-            return {
+            return [{
                 "role": self.role,
                 "content": [{"type": "text", "text": self.context}, {"type": "text", "text": self.content}],
-            }
-        return {"role": self.role, "content": self.content}
+            }]
+        return [{"role": self.role, "content": self.content}]
+
+    def size(self) -> int:
+        """Approximate size in characters, for history budgeting."""
+        if self.exchange:
+            return len(json.dumps(self.exchange))
+        return len(self.content) + len(self.context or "")
 
 
 @dataclass(slots=True)
@@ -57,6 +68,15 @@ class Started:
 
 
 @dataclass(slots=True)
+class ToolUseStart:
+    """Claude started a tool call (input still streaming). `server` = Anthropic-run tool (web search)."""
+
+    id: str
+    name: str
+    server: bool = False
+
+
+@dataclass(slots=True)
 class Completed:
     stop_reason: str = "end_turn"
     model: str | None = None
@@ -65,9 +85,16 @@ class Completed:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     refusal_category: str | None = None
+    #: The response's content blocks as API params (thinking, text, tool_use, server tool blocks).
+    content: list[dict] = field(default_factory=list)
+    web_search_requests: int = 0
 
 
-ProviderEvent = Started | TextDelta | TextReset | Completed
+ProviderEvent = Started | TextDelta | TextReset | ToolUseStart | Completed
+
+
+class ProviderJSONError(Exception):
+    """A streamed tool input could not be parsed (possible with eager input streaming); retry the request."""
 
 
 class ProviderError(Exception):
@@ -89,7 +116,15 @@ class ChatProvider(Protocol):
     def configured(self) -> bool: ...
 
     def stream(
-        self, history: list[ChatTurn], *, model: str, max_tokens: int, system: str, effort: str | None = None
+        self,
+        history: list[ChatTurn],
+        *,
+        model: str,
+        max_tokens: int,
+        system: str,
+        effort: str | None = None,
+        tools: list[dict] | None = None,
+        tail: list[dict] | None = None,
     ) -> AsyncIterator[ProviderEvent]: ...
 
 
@@ -113,7 +148,8 @@ class UnconfiguredProvider:
         return False
 
     async def stream(
-        self, history: list[ChatTurn], *, model: str, max_tokens: int, system: str, effort: str | None = None
+        self, history: list[ChatTurn], *, model: str, max_tokens: int, system: str, effort: str | None = None,
+        tools: list[dict] | None = None, tail: list[dict] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         words = UNCONFIGURED_NOTICE.split(" ")
         for i, word in enumerate(words):
@@ -184,13 +220,22 @@ class ClaudeProvider:
         return True
 
     def build_request(
-        self, history: list[ChatTurn], *, model: str, max_tokens: int, system: str, effort: str | None
+        self,
+        history: list[ChatTurn],
+        *,
+        model: str,
+        max_tokens: int,
+        system: str,
+        effort: str | None,
+        tools: list[dict] | None = None,
+        tail: list[dict] | None = None,
     ) -> dict:
+        messages = [p for t in history for p in t.to_params()] + list(tail or [])
         request: dict = {
             "model": model,
             "max_tokens": max_tokens,
             "system": system,
-            "messages": [t.to_param() for t in history],
+            "messages": messages,
             # Automatic prompt caching: the conversation prefix is re-read at ~10% of the input price.
             "cache_control": {"type": "ephemeral"},
         }
@@ -198,19 +243,27 @@ class ClaudeProvider:
         # only sent when the user chose one, so older models that reject it keep working.
         if effort:
             request["output_config"] = {"effort": effort}
+        if tools:
+            request["tools"] = tools
         if self.refusal_fallback and model in FALLBACK_CAPABLE_MODELS:
             request["fallbacks"] = "default"
             request["betas"] = [FALLBACK_BETA]
         return request
 
     async def stream(
-        self, history: list[ChatTurn], *, model: str, max_tokens: int, system: str, effort: str | None = None
+        self, history: list[ChatTurn], *, model: str, max_tokens: int, system: str, effort: str | None = None,
+        tools: list[dict] | None = None, tail: list[dict] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
-        request = self.build_request(history, model=model, max_tokens=max_tokens, system=system, effort=effort)
+        request = self.build_request(
+            history, model=model, max_tokens=max_tokens, system=system, effort=effort, tools=tools, tail=tail
+        )
         try:
             async with self.client.beta.messages.stream(**request) as stream:
                 async for event in stream:
-                    if event.type == "text":
+                    if event.type == "content_block_start" and getattr(event.content_block, "type", None) in ("tool_use", "server_tool_use"):
+                        block = event.content_block
+                        yield ToolUseStart(id=block.id, name=block.name, server=block.type == "server_tool_use")
+                    elif event.type == "text":
                         yield TextDelta(event.text)
                     elif event.type == "message_start":
                         u = event.message.usage
@@ -228,8 +281,11 @@ class ClaudeProvider:
             request_id = getattr(getattr(exc, "response", None), "headers", {}).get("request-id", "-")
             log.warning("Claude request failed: %s (request-id %s)", type(exc).__name__, request_id)
             raise ProviderError(_error_message(exc)) from exc
+        except ValueError as exc:  # unparseable streamed tool input (eager input streaming)
+            raise ProviderJSONError(str(exc)) from exc
 
         usage = final.usage
+        server_use = getattr(usage, "server_tool_use", None)
         details = getattr(final, "stop_details", None)
         yield Completed(
             stop_reason=final.stop_reason or "end_turn",
@@ -239,7 +295,39 @@ class ClaudeProvider:
             cache_read_tokens=usage.cache_read_input_tokens or 0,
             cache_write_tokens=usage.cache_creation_input_tokens or 0,
             refusal_category=getattr(details, "category", None) if final.stop_reason == "refusal" else None,
+            content=[block.model_dump(mode="json", exclude_none=True) for block in final.content],
+            web_search_requests=(getattr(server_use, "web_search_requests", 0) or 0) if server_use else 0,
         )
+
+
+@dataclass(slots=True)
+class TextResult:
+    text: str
+    usage: Completed
+
+
+async def complete_text(
+    provider: "ClaudeProvider", *, model: str, system: str, prompt: str, max_tokens: int = 2000
+) -> TextResult:
+    """One non-streaming request returning plain text (used by tools such as the summarizer)."""
+    request = provider.build_request([ChatTurn("user", prompt)], model=model, max_tokens=max_tokens, system=system, effort=None)
+    request.pop("cache_control", None)
+    try:
+        response = await provider.client.beta.messages.create(**request)
+    except anthropic.AnthropicError as exc:
+        log.warning("Claude request failed: %s", type(exc).__name__)
+        raise ProviderError(_error_message(exc)) from exc
+    usage = Completed(
+        stop_reason=response.stop_reason or "end_turn",
+        model=response.model,
+        input_tokens=response.usage.input_tokens or 0,
+        output_tokens=response.usage.output_tokens or 0,
+        cache_read_tokens=response.usage.cache_read_input_tokens or 0,
+        cache_write_tokens=response.usage.cache_creation_input_tokens or 0,
+    )
+    if response.stop_reason == "refusal":
+        raise ProviderError("Claude declined this request.", usage=usage)
+    return TextResult(text="".join(b.text for b in response.content if b.type == "text").strip(), usage=usage)
 
 
 @dataclass(slots=True)

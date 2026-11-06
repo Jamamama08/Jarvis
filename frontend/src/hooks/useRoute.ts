@@ -4,6 +4,7 @@ export type Route =
   | { view: "chat"; conversationId: string | null }
   | { view: "memory" }
   | { view: "tasks" }
+  | { view: "tools" }
   | { view: "settings" };
 
 export function parseRoute(path: string): Route {
@@ -15,6 +16,8 @@ export function parseRoute(path: string): Route {
       return { view: "memory" };
     case "tasks":
       return { view: "tasks" };
+    case "tools":
+      return { view: "tools" };
     case "settings":
       return { view: "settings" };
     default:

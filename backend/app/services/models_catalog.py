@@ -27,12 +27,17 @@ MODELS: tuple[ModelInfo, ...] = (
 _BY_ID = {m.id: m for m in MODELS}
 
 
-def estimate_cost(model: str, input_tokens: int, output_tokens: int, cache_read: int, cache_write: int) -> float | None:
+SEARCH_PRICE_USD = 0.01  # web search: $10 per 1,000 searches
+
+
+def estimate_cost(
+    model: str, input_tokens: int, output_tokens: int, cache_read: int, cache_write: int, web_searches: int = 0
+) -> float | None:
     info = _BY_ID.get(model)
     if info is None:
         return None
     per = 1_000_000
-    return (
+    return web_searches * SEARCH_PRICE_USD + (
         input_tokens * info.input_per_mtok
         + cache_write * info.input_per_mtok * 1.25
         + cache_read * info.input_per_mtok * 0.1

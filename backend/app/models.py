@@ -109,6 +109,7 @@ class ToolExecutionStatus(enum.StrEnum):
     running = "running"
     succeeded = "succeeded"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 def _enum(e: type[enum.Enum]) -> Enum:
@@ -299,6 +300,8 @@ class ToolExecution(Base):
         ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
     )
     task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), nullable=True, index=True)
+    tool_use_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     permission_level: Mapped[PermissionLevel] = mapped_column(_enum(PermissionLevel), nullable=False)
     status: Mapped[ToolExecutionStatus] = mapped_column(_enum(ToolExecutionStatus), nullable=False)
@@ -354,4 +357,5 @@ class ApiUsage(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    web_search_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow, nullable=False)

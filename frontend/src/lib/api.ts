@@ -10,6 +10,9 @@ import type {
   MemoryInput,
   MemoryList,
   Project,
+  Task,
+  ToolExecution,
+  ToolsOverview,
   Preferences,
   SettingsResponse,
   StreamEvent,
@@ -158,6 +161,21 @@ export const api = {
   updateProject: (id: string, body: Partial<Pick<Project, "name" | "description" | "status" | "progress_notes">>) =>
     request<Project>(`/api/projects/${id}`, json("PATCH", body)),
   deleteProject: (id: string) => request<void>(`/api/projects/${id}`, json("DELETE")),
+
+  toolsOverview: () => request<ToolsOverview>("/api/tools"),
+  setToolPolicy: (scope: string, decision: "allow" | "ask" | "deny" | null) =>
+    request<void>("/api/tools/policies", json("PUT", { scope, decision })),
+  decideTool: (executionId: string, approve: boolean, remember = false) =>
+    request<void>(`/api/tools/executions/${executionId}/decision`, json("POST", { approve, remember })),
+  toolExecutions: (params: { tool?: string; status?: string } = {}) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]);
+    return request<ToolExecution[]>(`/api/tools/executions?${qs}`);
+  },
+  listTasks: (state: "open" | "done" | "all" = "all") => request<Task[]>(`/api/tasks?state=${state}`),
+  createTask: (title: string, description = "") => request<Task>("/api/tasks", json("POST", { title, description })),
+  updateTask: (id: string, body: Partial<Pick<Task, "title" | "description">> & { status?: "pending" | "completed" | "cancelled" }) =>
+    request<Task>(`/api/tasks/${id}`, json("PATCH", body)),
+  deleteTask: (id: string) => request<void>(`/api/tasks/${id}`, json("DELETE")),
 
   usage: (days = 30) => request<UsageSummary>(`/api/usage?days=${days}`),
   listBackups: () => request<Backup[]>("/api/system/backups"),
