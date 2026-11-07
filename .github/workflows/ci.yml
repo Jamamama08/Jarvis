@@ -1,0 +1,57 @@
+# Runs every test suite on each push and pull request. Free for public repositories; private
+# repositories use the account's included GitHub Actions minutes (Linux minutes count 1x).
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Backend dependencies
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/pip install -q --upgrade pip
+          backend/.venv/bin/pip install -q -e 'backend[dev]'
+          backend/.venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Backend tests
+        working-directory: backend
+        run: .venv/bin/pytest -q
+
+      - name: Frontend dependencies
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Type check and unit tests
+        working-directory: frontend
+        run: npx tsc --noEmit && npx vitest run
+
+      - name: End-to-end tests
+        working-directory: frontend
+        run: npx vite build && npx playwright test --trace off

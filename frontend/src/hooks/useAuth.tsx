@@ -44,6 +44,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return tokenStore.onUnauthorized(() => void resolve());
   }, [resolve]);
 
+  // The backend may still be starting (the desktop app launches it): keep retrying quietly.
+  useEffect(() => {
+    if (state.phase !== "offline") return;
+    const t = setTimeout(() => void resolve(), 2000);
+    return () => clearTimeout(t);
+  }, [state, resolve]);
+
   const accept = (res: LoginResponse) => {
     tokenStore.set(res.token);
     setState({ phase: "authenticated", user: res.user });

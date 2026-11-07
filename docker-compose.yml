@@ -1,0 +1,21 @@
+# JARVIS on a server or home lab. Read README → Deployment before exposing it beyond this machine.
+services:
+  jarvis:
+    build: .
+    image: jarvis:latest
+    restart: unless-stopped
+    env_file: .env  # must set JARVIS_SETUP_TOKEN (and optionally ANTHROPIC_API_KEY)
+    environment:
+      # These override .env (which is written for running on the host).
+      JARVIS_HOST: 0.0.0.0  # inside the container; the port mapping below limits who can reach it
+      JARVIS_PORT: "8765"
+      JARVIS_DATA_DIR: /data
+      JARVIS_CORS_ORIGINS: '[]'  # the web app is served from the same origin
+    ports:
+      # Bound to this machine only. Reach it remotely through a VPN (e.g. Tailscale) or an
+      # HTTPS reverse proxy; never publish it directly to the internet.
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - jarvis-data:/data
+volumes:
+  jarvis-data:

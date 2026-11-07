@@ -62,6 +62,26 @@ async def automation_status(request: Request, user: CurrentUser, settings: AppSe
     )
 
 
+@router.get("/browser/installed")
+async def browser_installed(request: Request, user: CurrentUser) -> dict:
+    return {"installed": await request.app.state.browser.installed()}
+
+
+@router.post("/browser/install")
+async def install_browser(request: Request, user: CurrentUser, db: DbSession, dry_run: bool = False) -> dict:
+    """One-time browser download (~150 MB). Installing software is reserved for the owner account."""
+    from app.api.integrations import is_owner
+    from app.automation.browser import BrowserError
+
+    if not await is_owner(db, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner account can install the browser.")
+    try:
+        output = await request.app.state.browser.install(dry_run=dry_run)
+    except BrowserError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return {"installed": dry_run or await request.app.state.browser.installed(), "log": output[-2000:]}
+
+
 @router.post("/browser/close", status_code=status.HTTP_204_NO_CONTENT)
 async def close_browser(request: Request, user: CurrentUser) -> None:
     await request.app.state.browser.close_session(user.id)

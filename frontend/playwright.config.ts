@@ -12,6 +12,7 @@ import { join } from "node:path";
 const OFFLINE_PORT = 8799;
 const CLAUDE_PORT = 8797;
 const MOCK_PORT = 8798;
+const SETUP_PORT = 8795; // no API key yet; key checks and Claude calls go to the mock
 const python = process.platform === "win32" ? "..\\backend\\.venv\\Scripts\\python.exe" : "../backend/.venv/bin/python";
 const dist = join(process.cwd(), "dist");
 const backend = (port: number, extra: Record<string, string> = {}) => ({
@@ -38,6 +39,7 @@ export default defineConfig({
   use: { trace: "off", ...devices["Desktop Chrome"], viewport: { width: 1360, height: 860 } },
   projects: [
     { name: "offline", testMatch: "app.spec.ts", use: { baseURL: `http://127.0.0.1:${OFFLINE_PORT}` } },
+    { name: "setup", testMatch: "connections.spec.ts", use: { baseURL: `http://127.0.0.1:${SETUP_PORT}` } },
     { name: "claude", testMatch: /(claude|memory|voice|tools|automation|tasks)\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${CLAUDE_PORT}` } },
   ],
   webServer: [
@@ -48,6 +50,7 @@ export default defineConfig({
       env: { MOCK_ANTHROPIC_PORT: String(MOCK_PORT) },
     },
     backend(OFFLINE_PORT),
+    backend(SETUP_PORT, { ANTHROPIC_BASE_URL: `http://127.0.0.1:${MOCK_PORT}` }),
     backend(CLAUDE_PORT, {
       ANTHROPIC_API_KEY: "sk-ant-e2e-mock-key",
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${MOCK_PORT}`,

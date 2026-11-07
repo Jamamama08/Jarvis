@@ -22,6 +22,14 @@ from app.tools.builtin.data_tools import (
     update_task,
 )
 from app.tools.builtin.files import delete_file, read_file, search_files, write_file
+from app.tools.builtin.integrations import (
+    calendar_events,
+    email_read,
+    email_search,
+    email_send,
+    get_weather,
+    send_notification,
+)
 from app.tools.builtin.python_exec import run_python
 from app.tools.builtin.summarize import summarize_document
 from app.tools.builtin.task_tools import check_task, start_task
@@ -53,4 +61,10 @@ BUILTIN_TOOLS = [
     open_workspace_file,
     start_task,
     check_task,
+    email_search,
+    email_read,
+    email_send,
+    calendar_events,
+    send_notification,
+    get_weather,
 ]

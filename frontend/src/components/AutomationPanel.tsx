@@ -35,6 +35,7 @@ export function AutomationPanel() {
               : "Pages on your private network (router, NAS, this computer) are blocked."}
           </li>
         </ul>
+        <BrowserInstall />
         {status.browser_open_url && (
           <div className="flex items-center gap-2 rounded-lg border border-line bg-base px-3 py-2 text-xs">
             <span className="min-w-0 flex-1 truncate font-mono text-ink-dim" data-testid="browser-url">Open: {status.browser_open_url}</span>
@@ -73,6 +74,41 @@ export function AutomationPanel() {
         )}
         {status.desktop_enabled && <AddApp onAdded={load} platform={status.platform} />}
       </div>
+    </div>
+  );
+}
+
+function BrowserInstall() {
+  const [installed, setInstalled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.browserInstalled().then((r) => setInstalled(r.installed)).catch(() => setInstalled(null));
+  }, []);
+  if (installed === null || installed) {
+    return installed ? <p className="text-xs text-ok" data-testid="browser-installed">Browser installed.</p> : null;
+  }
+  return (
+    <div className="space-y-1 rounded-lg border border-warn/30 bg-warn/5 p-3 text-xs">
+      <p className="text-warn">The browser isn't installed yet. It's a one-time, free download of about 150 MB.</p>
+      <button
+        className="btn-outline px-3 py-1.5 text-xs"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setError(null);
+          try {
+            setInstalled((await api.installBrowser()).installed);
+          } catch (err) {
+            setError((err as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Globe size={13} />} {busy ? "Downloading… (a few minutes)" : "Install browser"}
+      </button>
+      {error && <p role="alert" className="text-danger">{error}</p>}
     </div>
   );
 }

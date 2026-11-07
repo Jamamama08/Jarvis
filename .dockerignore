@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+data
+backend/build
+backend/dist
+frontend/dist
+frontend/src-tauri
+frontend/test-results
+.env

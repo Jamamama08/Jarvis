@@ -13,7 +13,9 @@ dependencies = [
     "alembic>=1.13",
     "anthropic>=2.6,<3",
     "tzdata; sys_platform == 'win32'",
-    "playwright>=1.48",  # browser automation; run `python -m playwright install chromium` once  # time-zone database for the date/time tool on Windows
+    "playwright>=1.48",  # browser automation; run `python -m playwright install chromium` once
+    "icalendar>=6",  # calendar integration (iCalendar feeds)
+    "recurring-ical-events>=3",  # expands recurring calendar events  # time-zone database for the date/time tool on Windows
 ]
 
 [project.optional-dependencies]
@@ -21,6 +23,10 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
+    "aiosmtpd>=1.4",  # local SMTP server for email tests
+]
+build = [
+    "pyinstaller>=6.10",  # packages the backend as the desktop app's sidecar
 ]
 
 [build-system]

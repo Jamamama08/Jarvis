@@ -4,7 +4,7 @@ JARVIS is a personal AI assistant with a web app and a Windows desktop app (Taur
 
 ## Current phase
 
-**Phases 1-7 (Foundation, Claude integration, Persistent memory, Voice, Tool system, Browser and desktop automation, Autonomous tasks) are complete. Phase 8 (External integrations and deployment) is next.** Don't start a later phase until the current one is tested. Keep the app runnable after every change.
+**All 8 phases (Foundation, Claude integration, Persistent memory, Voice, Tool system, Browser and desktop automation, Autonomous tasks, External integrations and deployment) are complete.** New work is maintenance or features the user asks for. Keep the app runnable after every change.
 
 **Working agreement (from the user):** don't ask for permission to begin the next phase. When a phase is tested, documented, committed and pushed, continue straight to the next one.
 
@@ -97,7 +97,11 @@ cd frontend && npx vite build && npx playwright test --trace off
 - Steps report `STEP_RESULT: success|failure: reason`; `parse_step_result` interprets it. `ProviderError.retryable` drives transient retries (`task_retry_base_seconds` backoff; tests set it to 0).
 - Background jobs die with the process: `recover()` marks them failed at startup. Never leave a step `pending` when its run ends (`_mark`).
 
-## Phase 8 entry points
+## Integrations and deployment notes
 
-- Deployment: bundle the backend as a Tauri sidecar (PyInstaller) so the desktop app starts it; Windows installer (NSIS/MSI); document remote access (VPN or TLS reverse proxy, `JARVIS_SETUP_TOKEN`), backups.
-- External integrations: free/standard protocols first (e.g. iCalendar, IMAP/SMTP); any paid API must be stated before adding. Sending communications is restricted, financial actions sensitive.
+- `core/secrets.py`: `SecretStore` (`<data dir>/secrets.json`, 0600, atomic replace) holds connection secrets per user (`user(id)[section]`) and the owner-set `anthropic_api_key`. Never put these in the database, API responses or logs; status endpoints return only `configured` plus non-secret fields.
+- `api/integrations.py`: only the owner (first user) sets the Claude key; it's validated via `app.state.key_check_client` and swapped in live with `install_provider` (chat and `task_runner`). An env `ANTHROPIC_API_KEY` always wins (`api_key_source`).
+- `integrations/`: plain stdlib/HTTP clients (`http.fetch` is the seam tests patch). Email: IMAP search text goes through `_quote`, UIDs must be digits, SMTP refuses header injection. Tools in `tools/builtin/integrations.py` label fetched content untrusted; sending is restricted with a `preview`.
+- Desktop: `jarvis_server.py` + `jarvis-backend.spec` (PyInstaller one-file) → `scripts/build-sidecar.*` → `src-tauri/binaries/jarvis-backend-<triple>`. `lib.rs` spawns it with `JARVIS_PARENT_PID`; `core/watchdog.py` exits the backend when the app dies. Code that differs when frozen checks `config.FROZEN` (no `frontend_dist`, `python_exec.python_executable()`, browser install via the bundled driver). New runtime data files or lazily imported modules must be added to the spec.
+- `services/backup.py` `backup_scheduler` (every `backup_interval_hours`). Docker: `Dockerfile` + `docker-compose.yml` (compose pins `JARVIS_HOST`/`JARVIS_DATA_DIR` over `.env`, publishes on 127.0.0.1 only). CI: `.github/workflows/ci.yml` (all suites), `desktop.yml` (Windows installers).
+- Never weaken: setup token when not on loopback, desktop control only on loopback, no direct public exposure (README → Deployment).

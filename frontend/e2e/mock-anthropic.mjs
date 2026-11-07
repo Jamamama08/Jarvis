@@ -7,11 +7,47 @@ import http from "node:http";
 
 const port = Number(process.env.MOCK_ANTHROPIC_PORT ?? 8798);
 const requests = [];
+const hooks = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const frame = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
 http
   .createServer(async (req, res) => {
+    if (req.method === "GET" && req.url.startsWith("/v1/models")) {
+      // Key check: keys containing "good" are valid.
+      const auth = String(req.headers["authorization"] ?? req.headers["x-api-key"] ?? "");
+      if (!auth.includes("good")) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ type: "model", id: "claude-opus-5-5", display_name: "Claude Opus 5.5", created_at: "2026-01-01T00:00:00Z" }], has_more: false, first_id: null, last_id: null }));
+      return;
+    }
+    if (req.method === "GET" && req.url === "/__cal.ics") {
+      const d = new Date();
+      const ymd = (x) => x.toISOString().slice(0, 10).replaceAll("-", "");
+      const tomorrow = new Date(d.getTime() + 86400000);
+      res.writeHead(200, { "content-type": "text/calendar" });
+      res.end(["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//mock//EN", "BEGIN:VEVENT", "UID:e2e@mock",
+        `DTSTART:${ymd(tomorrow)}T150000Z`, `DTEND:${ymd(tomorrow)}T160000Z`, "SUMMARY:Board meeting",
+        "END:VEVENT", "END:VCALENDAR", ""].join("\r\n"));
+      return;
+    }
+    if (req.url === "/__hook") {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      hooks.push(raw);
+      res.writeHead(200);
+      res.end("ok");
+      return;
+    }
+    if (req.method === "GET" && req.url === "/__hooks") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(hooks));
+      return;
+    }
     if (req.method === "GET" && req.url === "/__page") {
       res.writeHead(200, { "content-type": "text/html" });
       res.end("<html><head><title>Malibu Weather</title></head><body><h1>Malibu</h1><p>Sunny, 24 degrees.</p><a href='/__page'>Refresh</a></body></html>");

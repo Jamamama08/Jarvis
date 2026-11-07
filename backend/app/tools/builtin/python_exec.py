@@ -10,6 +10,7 @@ with your user account's permissions, which is why it requires approval.
 
 import asyncio
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -45,6 +46,18 @@ def _limits(cpu_seconds: int):  # pragma: no cover - runs in the child process
     return apply
 
 
+def python_executable() -> str | None:
+    """The interpreter for user scripts. In the packaged desktop app sys.executable is JARVIS itself,
+    so a system Python is needed there (the tool is hidden if none is installed)."""
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    for name in ("python3", "python", "py"):
+        found = shutil.which(name)
+        if found and "WindowsApps" not in found:  # skip the Microsoft Store stub
+            return found
+    return None
+
+
 async def run_python_code(code: str, cwd: Path, timeout: float) -> tuple[int | None, str, str, bool]:
     """Returns (exit code or None on timeout, stdout, stderr, timed_out)."""
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
@@ -54,8 +67,11 @@ async def run_python_code(code: str, cwd: Path, timeout: float) -> tuple[int | N
         kwargs: dict = {}
         if os.name == "posix":
             kwargs["preexec_fn"] = _limits(max(1, int(timeout)))
+        python = python_executable()
+        if python is None:
+            raise ToolError("No Python installation was found on this computer, so scripts can't run.")
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-I", "-X", "utf8", script,
+            python, "-I", "-X", "utf8", script,
             cwd=str(cwd),
             env=_safe_env(),
             stdin=asyncio.subprocess.DEVNULL,
@@ -109,5 +125,5 @@ run_python = Tool(
     handler=_run_python,
     timeout=None,  # the subprocess enforces tool_timeout_seconds itself and kills the process
     summarize=lambda a: (a.code.strip().splitlines() or [""])[0][:80] + (" …" if "\n" in a.code.strip() else ""),
-    enabled=lambda settings: settings.python_tool_enabled,
+    enabled=lambda settings: settings.python_tool_enabled and python_executable() is not None,
 )

@@ -56,3 +56,28 @@ def list_backups(settings: Settings) -> list[BackupOut]:
     if not directory.exists():
         return []
     return [_describe(p) for p in sorted(directory.glob("jarvis-*.db"), reverse=True)]
+
+
+def latest_backup_age_hours(settings: Settings) -> float | None:
+    backups = sorted(backup_dir(settings).glob("jarvis-*.db")) if backup_dir(settings).exists() else []
+    if not backups:
+        return None
+    return (datetime.now(UTC).timestamp() - backups[-1].stat().st_mtime) / 3600
+
+
+async def backup_scheduler(settings: Settings, check_every_seconds: float = 3600) -> None:
+    """Background loop: make a backup whenever the newest one is older than backup_interval_hours."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    while True:
+        try:
+            age = latest_backup_age_hours(settings)
+            if settings.backup_interval_hours > 0 and settings.sqlite_path and settings.sqlite_path.exists() and (
+                age is None or age >= settings.backup_interval_hours
+            ):
+                path = await anyio.to_thread.run_sync(backup_sync, settings.sqlite_path, backup_dir(settings))
+                log.info("Automatic backup written to %s", path.name)
+        except Exception:  # never let the scheduler die
+            log.exception("Automatic backup failed")
+        await anyio.sleep(check_every_seconds)

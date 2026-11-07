@@ -379,7 +379,21 @@ async def complete_json(
     return JsonResult(data=data, usage=usage)
 
 
-def build_provider(settings: Settings) -> ChatProvider:
+def api_key_source(settings: Settings, stored_key: str | None) -> str | None:
+    """Where the Anthropic key comes from: "env" (.env / environment wins), "settings" (entered in the app) or None."""
     if settings.anthropic_api_key and settings.anthropic_api_key.get_secret_value().strip():
+        return "env"
+    if stored_key and stored_key.strip():
+        return "settings"
+    return None
+
+
+def build_provider(settings: Settings, stored_key: str | None = None) -> ChatProvider:
+    source = api_key_source(settings, stored_key)
+    if source == "env":
         return ClaudeProvider(settings)
+    if source == "settings":
+        from pydantic import SecretStr
+
+        return ClaudeProvider(settings.model_copy(update={"anthropic_api_key": SecretStr(stored_key.strip())}))
     return UnconfiguredProvider()

@@ -2,9 +2,9 @@
 
 A personal AI assistant powered by Claude. It runs as a **web app** in your browser and as a **Windows desktop app** (Tauri 2). Both use the same local backend, database and (from Phase 2 on) AI engine.
 
-> **Status: Phase 7 of 8 (Autonomous tasks) is complete.** JARVIS can now take a goal, plan it, carry it out in the background (running read-only steps in parallel), ask you before risky actions, and verify the result.
+> **Status: all 8 phases are complete.** Phase 8 added connections (email over IMAP/SMTP, calendars, phone notifications, weather, and entering the Claude key in Settings), a Windows installer that starts its own backend, automatic backups, a Docker image for web deployment, and CI.
 >
-> Earlier phases: JARVIS chats with Claude (streamed Markdown replies, context, model/effort/length settings, cancellation, usage and cost tracking), has long-term memory you control, supports voice, and uses tools under a permission system that asks before anything risky: calculator, date and time, workspace files, document summaries, your task list, memory, Python, optional web search, its own web browser, and the desktop apps you approve. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice. See the [roadmap](#roadmap).
+> Earlier phases: JARVIS takes a goal, plans it and carries it out in the background, asking before risky actions. It chats with Claude (streamed Markdown replies, context, model/effort/length settings, cancellation, usage and cost tracking), has long-term memory you control, supports voice, and uses tools under a permission system that asks before anything risky: calculator, date and time, workspace files, document summaries, your task list, memory, Python, optional web search, its own web browser, and the desktop apps you approve. Without an `ANTHROPIC_API_KEY`, messages are saved and answered with a clear "Claude is not connected" notice. See the [roadmap](#roadmap).
 
 ---
 
@@ -19,6 +19,8 @@ A personal AI assistant powered by Claude. It runs as a **web app** in your brow
 - [Tools and permissions](#tools-and-permissions)
 - [Browser and desktop automation](#browser-and-desktop-automation)
 - [Autonomous tasks](#autonomous-tasks)
+- [Connections](#connections)
+- [Deployment and remote access](#deployment-and-remote-access)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Security model](#security-model)
@@ -139,7 +141,7 @@ Jarvis/
 
 Open http://localhost:5173. On first launch you create the owner account.
 
-**Connect Claude:** put your key in `.env` in the repo root, then restart the backend:
+**Connect Claude:** sign in as the owner, open **Settings → Connections**, paste your key and press **Save key**. JARVIS checks it with Anthropic and starts using it immediately, with no restart. Alternatively, put it in `.env` in the repo root and restart the backend (a key in `.env` always wins):
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
@@ -147,27 +149,39 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 Create a key at https://console.anthropic.com/ (API keys). Usage is billed to that Anthropic account.
 
-**Single-process web mode** (no Vite): build the frontend once and FastAPI serves it.
+**Everyday use** (no hot reload): one process serves the web app and the API. It builds the frontend the first time (`--rebuild` / `-Rebuild` to rebuild).
 
 ```bash
-cd frontend && npm run build
+./scripts/start.sh
 ```
 
-```bash
-cd backend && .venv/bin/python -m app.main
+```powershell
+.\scripts\start.ps1
 ```
 
 Then open http://127.0.0.1:8765.
 
 ## Desktop app (Windows)
 
-The desktop app shows the same UI and connects to the backend at `http://127.0.0.1:8765`. **In Phase 1 the backend must already be running.** Phase 8 will bundle it as a sidecar that starts automatically.
+The installed desktop app is self-contained: the backend is bundled as a single executable (a Tauri **sidecar**, built with PyInstaller) that the app starts on `127.0.0.1:8765` when it opens and stops when it closes. Nothing else needs to be installed: no Python, no Node. Data lives in `%APPDATA%\com.jarvis.assistant` (the app's data folder). If a JARVIS backend is already listening on port 8765 (for example `scripts/dev.ps1`), the app uses it instead of starting its own. The backend also watches the app's process and exits if the app is killed, so it never keeps running in the background.
+
+**Build the installer** (Windows, after `scripts\setup.ps1`, with Rust and the C++ Build Tools installed):
 
 ```powershell
-cd frontend
-npx tauri dev      # dev window with hot reload (also starts Vite)
-npx tauri build    # produces NSIS/MSI installers in src-tauri/target/release/bundle
+.\scripts\build-sidecar.ps1
 ```
+
+```powershell
+cd frontend; npx tauri build
+```
+
+The NSIS `.exe` and `.msi` installers land in `frontend\src-tauri\target\release\bundle\`. The **Desktop build** GitHub Actions workflow (`.github/workflows/desktop.yml`) does the same on a Windows runner and uploads the installers as an artifact. Run it from the Actions tab or push a `v*` tag.
+
+**Development:** `cd frontend; npx tauri dev` opens a dev window with hot reload and uses a backend you already started with `scripts\dev.ps1`. Tauri requires the sidecar file to exist even in dev, so run `build-sidecar` once first.
+
+- **Browser automation** needs a one-time Chromium download (~150 MB, free). In the installed app, open **Tools → Browser → Install browser**.
+- **Python tool:** the installed app doesn't include a Python interpreter. The Python runner is offered only if Python is installed on the computer (`py`, `python` or `python3` on PATH).
+- **Unsigned installer:** Windows SmartScreen will warn that the publisher is unknown ("More info → Run anyway"). Signing needs a paid code-signing certificate (see [Costs](#costs)).
 
 ## Memory
 
@@ -280,6 +294,50 @@ You can cancel a running task (stopping any current request), run it again, or d
 
 **Cost:** a task makes several Claude requests (planning, each step and its tool calls, verification), so it costs more than a single message. The token count and estimated cost are shown on each task.
 
+## Connections
+
+Open **Settings → Connections**. Everything here uses free, standard protocols; no paid service is involved.
+
+| Connection | How | Tools | Permission |
+| --- | --- | --- | --- |
+| **Claude API key** | Paste the key; it's checked with Anthropic before saving. Only the owner (first account) can change it. Hidden if the key comes from `.env`. | – | – |
+| **Email** | Any IMAP/SMTP account. Presets for Gmail, Outlook and iCloud. Use an **app password** (required by Gmail/Outlook with 2-step verification). **Save & test** logs in to both servers. | `email_search`, `email_read` | automatic |
+| | | `email_send` | restricted: asks first, showing recipients and subject |
+| **Calendar** | A private iCalendar (`.ics`) address: Google Calendar ("Secret address in iCal format"), Outlook ("Publish calendar → ICS"), iCloud (public calendar link). Read-only; recurring events are expanded. | `calendar_events` | automatic |
+| **Phone notifications** | A webhook URL: [ntfy](https://ntfy.sh) (free phone app; use a hard-to-guess topic), a Discord or Slack incoming webhook, or any endpoint accepting JSON `{title, message}`. | `send_notification` | restricted: asks first, showing the text |
+| **Weather** | Nothing to set up: [Open-Meteo](https://open-meteo.com) (free, no key). | `get_weather` | automatic |
+
+- Connection settings (passwords, webhook and calendar URLs, the API key) are stored **only on the backend**, in `<data dir>/secrets.json` with owner-only file permissions, written atomically. They're never stored in the database, sent back to the browser (the UI only sees "configured" and non-secret fields like the server name), or written to logs. Each user has their own connections.
+- Email bodies, calendar entries and other fetched content are labelled as untrusted data for Claude, so instructions inside an email can't trigger actions; every action still goes through the permission system.
+- Email search uses IMAP `SEARCH` with the query stripped of quotes and line breaks, and message IDs must be numeric, so search text can't inject IMAP commands. Sent mail is validated (one address per recipient, no line breaks in the subject).
+
+## Deployment and remote access
+
+Three ways to run JARVIS:
+
+1. **Desktop app (Windows):** the installer above. Everything runs on your PC, and desktop control is available.
+2. **Local web app:** `scripts/start.sh` / `start.ps1`, open http://127.0.0.1:8765.
+3. **Server with Docker** (web only, for a home server or VPS):
+
+   ```bash
+   cp .env.example .env    # set JARVIS_SETUP_TOKEN to a long random string (and optionally ANTHROPIC_API_KEY)
+   ```
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+   The image (`Dockerfile`) builds the web app, installs the backend and Chromium, runs as a non-root user, stores everything in the `jarvis-data` volume, and has a health check. `docker-compose.yml` publishes it on **127.0.0.1:8765 only**. The first account needs the setup token, because the container listens on a non-loopback address. Desktop control is off in a container.
+
+**Remote access (from your phone or another computer).** JARVIS can browse the web, read your email and run tools, so **never expose port 8765 directly to the internet**. Pick one:
+
+- **VPN (recommended):** [Tailscale](https://tailscale.com) (free for personal use) or WireGuard. Your devices reach the server over the private network and nothing is public. With Tailscale, `tailscale serve --bg 8765` also gives you HTTPS on your tailnet.
+- **TLS reverse proxy:** Caddy (automatic Let's Encrypt certificates) or nginx in front of `127.0.0.1:8765`, e.g. Caddyfile `jarvis.example.com { reverse_proxy 127.0.0.1:8765 }`. Use a strong password. Login attempts are rate-limited, and sessions are bearer tokens over HTTPS.
+
+Either way, keep `JARVIS_SETUP_TOKEN` set so nobody else can claim the first account. Desktop control turns itself off when the server isn't bound to loopback; don't force it on for a server you reach remotely.
+
+**Backups:** JARVIS snapshots the database automatically every 24 hours (`JARVIS_BACKUP_INTERVAL_HOURS`, 0 = off) into `<data dir>/backups` and keeps the 20 newest. Copy that folder, plus `secrets.json` if you want your connections, to another disk or machine regularly. For Docker: `docker compose cp jarvis:/data ./jarvis-backup`. To restore, stop JARVIS and replace `jarvis.db` with a backup file.
+
 ## Configuration
 
 Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` prefix, except `ANTHROPIC_API_KEY`.
@@ -313,6 +371,8 @@ Copy `.env.example` to `.env` in the repo root. All settings use the `JARVIS_` p
 | `JARVIS_CORS_ORIGINS` | Vite + Tauri origins | JSON list of allowed browser origins |
 | `JARVIS_DATA_DIR` | `./data` | Database and backups |
 | `JARVIS_SESSION_TTL_HOURS` | `336` | Login session lifetime |
+| `JARVIS_BACKUP_INTERVAL_HOURS` | `24` | Automatic database backup interval; `0` turns it off |
+| `JARVIS_FRONTEND_DIST` | `frontend/dist` | Built web app to serve (unset in the desktop sidecar) |
 
 User preferences (assistant name, model, effort, reply length cap, memory on/off, tools on/off, web search on/off, voice options (input, spoken replies, voice, language, rate, auto-send, hands-free), Enter-to-send) are stored per user in the database and edited on the Settings page. Settings also shows API usage (requests, tokens, cached tokens) with an estimated cost.
 
@@ -335,6 +395,10 @@ The automation E2E tests (`e2e/automation.spec.ts`) have JARVIS open a page in i
 
 The tools E2E tests (`e2e/tools.spec.ts`) use mock-API prompts that trigger tool calls: an automatic tool, approving a file write, declining a sensitive delete, blocking a tool on the Tools page, the activity log, and the task list.
 
+Phase 8 tests (`backend/tests/test_integrations.py`) cover the secret store (file permissions, per-user sections, nothing in API responses), setting the Claude key (validated, owner-only, live provider swap, `.env` key wins), email against a **real local SMTP server** (aiosmtpd) and a fake IMAP server (search, read, IMAP-injection safety, header-injection refusal), the email/calendar/notification/weather tools and their approval previews, recurring calendar events over a local HTTP server, every notification format, the backup scheduler, the browser installer endpoint (owner-only), Python detection in the packaged app, and the parent-process watchdog. The E2E `connections.spec.ts` connects a key (rejected, then accepted, then "Claude online" without a restart), a calendar and a phone notification from the Settings page.
+
+**CI:** `.github/workflows/ci.yml` runs all three suites on every push and pull request (Ubuntu).
+
 No suite calls the real Anthropic API, so tests are free and need no key.
 
 ## Security model
@@ -348,7 +412,8 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 - Logs pass through a **redaction filter** that removes API keys, bearer tokens and password/secret fields.
 - Responses include `nosniff`, `X-Frame-Options: DENY` and `no-referrer` headers. CORS is an explicit allow-list. The Tauri CSP only allows connections to the local backend.
 - Every query is scoped to the authenticated user, and tests check that users can't see each other's data.
-- The permission system for tools (automatic / restricted / sensitive, with approval prompts) arrives in Phase 5. Its tables (`permissions`, `tool_executions`) already exist.
+- Tools run under the permission system (automatic / restricted / sensitive, with approval prompts); see [Tools and permissions](#tools-and-permissions).
+- Connection secrets (email passwords, webhook URLs, a key saved in Settings) live in `secrets.json` on the backend with owner-only permissions; see [Connections](#connections).
 - **Don't expose JARVIS to the internet directly.** For remote access, put it behind a VPN (e.g. Tailscale) or a TLS reverse proxy.
 
 ## Data, migrations and backups
@@ -362,7 +427,7 @@ No suite calls the real Anthropic API, so tests are free and need no key.
   ```bash
   cd backend && .venv/bin/python -m app.cli backup
   ```
-  Both use SQLite's online backup API, so snapshots are consistent while the app runs. They are written to `data/backups/`, and the 20 most recent are kept.
+  Both use SQLite's online backup API, so snapshots are consistent while the app runs. They are written to `data/backups/`, and the 20 most recent are kept. A backup is also made automatically every 24 hours (`JARVIS_BACKUP_INTERVAL_HOURS`).
 - Forgotten password (local recovery):
   ```bash
   cd backend && .venv/bin/python -m app.cli reset-password <username>
@@ -379,7 +444,10 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 | Tools | Free, except where noted. Tool calls add Claude tokens (each step is one request, and tool results are input tokens). `summarize_document` makes extra Claude requests for long documents. |
 | Web search (optional, off by default) | **$10 per 1,000 searches** plus tokens, billed by Anthropic; at most 5 per request. Web fetch is billed as tokens only. Included in the usage estimate. |
 | Browser automation | Free (local Chromium). Pages read by JARVIS become input tokens. |
-| Windows code-signing certificate (Phase 8, optional) | Paid, from a third-party CA. Only needed to avoid SmartScreen warnings when you distribute the app. |
+| Connections | Free: email over your own IMAP/SMTP account, iCalendar links, ntfy/Discord/Slack webhooks, Open-Meteo weather (free for non-commercial use, no key). Tool results add Claude input tokens. |
+| Docker, Tailscale, Caddy | Free (Tailscale's personal plan is free; a VPS to host on is paid by the provider). |
+| GitHub Actions (CI, desktop build) | Free for public repositories. Private repositories use your included minutes (2,000/month on the free plan); **Windows minutes count double**, and a desktop build takes roughly 15–25 minutes. |
+| Windows code-signing certificate (optional) | Paid yearly, from a third-party certificate authority. Only needed to avoid SmartScreen warnings when you distribute the app. |
 
 ## Roadmap
 
@@ -390,4 +458,4 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 - [x] **Phase 5: Tool system.** Tool registry with validated schemas, permission engine (automatic/restricted/sensitive) with in-chat approvals and per-tool rules, redacted execution log, agent loop with step/time/token limits, tools for calculator, date and time, workspace files, document summarizer, task list, memory, Python, and opt-in web search. Tools and Tasks pages.
 - [x] **Phase 6: Browser and desktop automation.** Isolated Playwright browser (open/read/click/type/select) with a private-network guard and password refusal; approved desktop apps and opening workspace documents; Browser & apps settings.
 - [x] **Phase 7: Autonomous tasks.** Planner (structured output), dependency-aware execution with enforced read-only parallelism, approvals on the Tasks page, transient and failure retries, verification report, cancel, re-run, history with cost, restart recovery, `start_task`/`check_task` tools.
-- [ ] **Phase 8: Integrations and deployment.** External services, backend sidecar in the desktop installer, packaging, remote-access guidance.
+- [x] **Phase 8: Integrations and deployment.** Connections (Claude key in Settings, IMAP/SMTP email, iCalendar, ntfy/Discord/Slack notifications, Open-Meteo weather) with a server-side secret store; backend sidecar bundled in the Windows installer with a parent watchdog; in-app browser install; automatic backups; Docker image; CI and desktop-build workflows; remote-access guidance.

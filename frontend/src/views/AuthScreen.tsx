@@ -17,9 +17,11 @@ export function AuthScreen() {
     return (
       <Frame>
         <VoiceOrb state="offline" size={120} />
-        <h1 className="mt-6 text-lg font-semibold">Backend unreachable</h1>
+        <h1 className="mt-6 text-lg font-semibold">Connecting to JARVIS…</h1>
         <p className="mt-2 max-w-sm text-center text-sm text-ink-dim">{state.error}</p>
-        <p className="mt-1 text-xs text-ink-faint">Start it with <code className="font-mono">scripts/dev-backend</code></p>
+        <p className="mt-1 max-w-sm text-center text-xs text-ink-faint">
+          Retrying automatically. If this persists, start the backend (<code className="font-mono">scripts/dev.sh</code> or <code className="font-mono">scripts/start.sh</code>).
+        </p>
         <button className="btn-outline mt-6" onClick={retry}>
           <RefreshCw size={15} /> Retry
         </button>

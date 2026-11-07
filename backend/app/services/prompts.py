@@ -31,9 +31,10 @@ def build_system_prompt(
     )
     if tools_enabled:
         capabilities = (
-            "Tools: you have tools for calculations, the current date and time, the user's task list, their "
-            "saved memories, and files in their JARVIS workspace folder (read, search, summarize, write, delete), "
-            "and may have a Python runner. Use a tool whenever it gives a more accurate or up-to-date answer "
+            "Tools: you have tools for calculations, the current date and time, weather, the user's task list, "
+            "their saved memories, files in their JARVIS workspace folder (read, search, summarize, write, delete), "
+            "and, once the user connects them in Settings, their email, calendar and phone notifications; you may "
+            "also have a Python runner. If a connection isn't set up, the tool says so: tell the user where to set it up. Use a tool whenever it gives a more accurate or up-to-date answer "
             "than you could alone (always use the calculator for non-trivial arithmetic and current_datetime "
             "for anything date-dependent). Some actions (writing or deleting files, running code) need the "
             "user's approval; the app asks them automatically, so just call the tool. If an action is declined "

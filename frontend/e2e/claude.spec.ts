@@ -71,7 +71,7 @@ test.describe.serial("JARVIS phase 2: Claude", () => {
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByLabel("Claude model").selectOption("claude-sonnet-5-5");
     await page.getByLabel("Effort").selectOption("low");
-    await page.getByRole("button", { name: "Save" }).nth(1).click();
+    await page.locator(".card").filter({ has: page.getByRole("heading", { name: "Assistant" }) }).getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Saved")).toBeVisible();
     await expect(page.getByTestId("usage-totals")).toContainText("Requests");
 

@@ -4,17 +4,24 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import asyncio
+import os
+
+import anthropic
 import anyio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app import __version__
-from app.api import agent_tasks, auth, automation, conversations, memories, system, tools
+from app.api import agent_tasks, auth, automation, conversations, integrations, memories, system, tools
 from app.core.config import Settings, get_settings
 from app.core.db import Database
+from app.core.secrets import SecretStore
+from app.core.watchdog import watch_parent
 from app.core.logging import configure_logging
 from app.migrations import upgrade_to_head
+from app.services.backup import backup_scheduler
 from app.services.chat import GenerationRegistry
 from app.services.providers import build_provider
 from app.automation.browser import BrowserManager
@@ -40,6 +47,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tools=app.state.tools, approvals=app.state.approvals, services=app.state.tool_services,
         )
         app.state.tool_services["tasks"] = app.state.task_runner
+        backups = asyncio.create_task(backup_scheduler(settings), name="backup-scheduler")
+        parent_pid = os.environ.get("JARVIS_PARENT_PID", "")
+        watchdog = asyncio.create_task(watch_parent(int(parent_pid)), name="parent-watchdog") if parent_pid.isdigit() else None
         interrupted = await app.state.task_runner.recover()
         if interrupted:
             log.warning("Marked %d interrupted task(s) as failed", interrupted)
@@ -47,19 +57,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            backups.cancel()
+            if watchdog:
+                watchdog.cancel()
             await app.state.task_runner.shutdown()
             await app.state.browser.shutdown()
             await app.state.db.dispose()
 
     app = FastAPI(title="JARVIS", version=__version__, lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.settings = settings
-    app.state.provider = build_provider(settings)
+    app.state.secrets = SecretStore(settings.data_dir / "secrets.json")
+    app.state.provider = build_provider(settings, app.state.secrets.get("anthropic_api_key"))
     app.state.generations = GenerationRegistry()
     app.state.login_limiter = auth.LoginRateLimiter()
     app.state.tools = default_registry()
     app.state.approvals = ApprovalBroker()
     app.state.browser = BrowserManager(settings)
-    app.state.tool_services = {"browser": app.state.browser}
+    app.state.tool_services = {"browser": app.state.browser, "secrets": app.state.secrets}
+    # Builds the client used to validate a newly entered API key (replaceable in tests).
+    app.state.key_check_client = lambda key: anthropic.AsyncAnthropic(api_key=key, max_retries=1, timeout=20)
 
     app.add_middleware(
         CORSMiddleware,
@@ -78,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(tools.router)
     app.include_router(automation.router)
     app.include_router(agent_tasks.router)
+    app.include_router(integrations.router)
 
     _mount_frontend(app, settings.frontend_dist)
     return app

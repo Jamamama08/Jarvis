@@ -1,0 +1,82 @@
+# Builds the Windows desktop installers (NSIS .exe and .msi) with the backend bundled as a
+# sidecar. Runs on demand, on version tags, and when desktop-related files change.
+# Cost: free for public repositories; on private repositories Windows minutes count 2x
+# against the included GitHub Actions minutes. The installers are unsigned (see README).
+name: Desktop build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    paths:
+      - "frontend/src-tauri/**"
+      - "backend/jarvis-backend.spec"
+      - "backend/jarvis_server.py"
+      - "scripts/build-sidecar.ps1"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+
+      - name: Backend environment
+        shell: pwsh
+        run: |
+          python -m venv backend\.venv
+          backend\.venv\Scripts\python.exe -m pip install -q --upgrade pip
+          backend\.venv\Scripts\python.exe -m pip install -q -e "backend"
+
+      - name: Build backend sidecar
+        shell: pwsh
+        run: ./scripts/build-sidecar.ps1
+
+      - name: Smoke-test the sidecar
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem frontend\src-tauri\binaries\jarvis-backend-*.exe | Select-Object -First 1
+          $env:JARVIS_DATA_DIR = Join-Path $env:RUNNER_TEMP "jarvis-smoke"
+          $env:JARVIS_PORT = "8766"
+          $p = Start-Process -PassThru -FilePath $exe.FullName
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            try { $r = Invoke-RestMethod http://127.0.0.1:8766/api/health; if ($r.status -eq "ok") { $ok = $true; break } } catch {}
+            Start-Sleep -Seconds 1
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "Sidecar did not become healthy" }
+
+      - name: Build installers
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-windows-installers
+          path: |
+            frontend/src-tauri/target/release/bundle/nsis/*.exe
+            frontend/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error

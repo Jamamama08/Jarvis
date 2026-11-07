@@ -27,3 +27,8 @@ frontend/src-tauri/gen/schemas/
 Thumbs.db
 .vscode/
 .idea/
+
+# Packaging (PyInstaller sidecar, Tauri bundles)
+backend/build/
+backend/dist/
+frontend/src-tauri/binaries/

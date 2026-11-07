@@ -9,6 +9,11 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+import sys
+
+#: True inside the packaged desktop sidecar (PyInstaller). There is no source checkout then:
+#: the desktop app passes JARVIS_DATA_DIR, and the frontend is served by the desktop app itself.
+FROZEN = bool(getattr(sys, "frozen", False))
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
 
@@ -35,7 +40,7 @@ class Settings(BaseSettings):
         ]
     )
     # When set, FastAPI serves the built frontend from this directory (single-origin web app).
-    frontend_dist: Path | None = REPO_ROOT / "frontend" / "dist"
+    frontend_dist: Path | None = None if FROZEN else REPO_ROOT / "frontend" / "dist"
 
     # --- Data ---------------------------------------------------------------
     data_dir: Path = REPO_ROOT / "data"
@@ -79,6 +84,9 @@ class Settings(BaseSettings):
     browser_allow_private_network: bool = False
     browser_idle_timeout_seconds: float = Field(default=600.0, gt=0)
     browser_navigation_timeout_seconds: float = Field(default=30.0, gt=0)
+
+    # --- Backups -----------------------------------------------------------------------
+    backup_interval_hours: float = Field(default=24.0, ge=0)  # automatic backups; 0 turns them off
 
     # --- Autonomous tasks (Phase 7) -----------------------------------------------------
     task_token_budget: int = Field(default=1_000_000, ge=10_000)  # all requests of one task

@@ -12,6 +12,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.automation.netguard import BlockedURL, NetworkGuard
@@ -204,6 +205,38 @@ class BrowserManager:
             except Exception:  # pragma: no cover
                 pass
             self._playwright = None
+
+    async def installed(self) -> bool:
+        """Whether the Chromium build this Playwright version needs is present."""
+        try:
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                return Path(p.chromium.executable_path).exists()
+        except Exception:
+            return False
+
+    async def install(self, *, dry_run: bool = False) -> str:
+        """Download the browser (one time, ~150 MB) with Playwright's bundled driver.
+        Works in the packaged desktop app too, where there's no `playwright` command."""
+        from playwright._impl._driver import compute_driver_executable, get_driver_env
+
+        driver = compute_driver_executable()
+        command = [*driver, "install", "chromium"] if isinstance(driver, tuple) else [str(driver), "install", "chromium"]
+        if dry_run:
+            command.append("--dry-run")
+        proc = await asyncio.create_subprocess_exec(
+            *command, env=get_driver_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=1200)
+        except TimeoutError as exc:
+            proc.kill()
+            raise BrowserError("The browser download took too long. Try again.") from exc
+        text = out.decode(errors="replace")
+        if proc.returncode != 0:
+            raise BrowserError("Installing the browser failed: " + (text.strip().splitlines() or ["unknown error"])[-1][:300])
+        return text
 
     def current_url(self, user_id: str) -> str | None:
         session = self._sessions.get(user_id)

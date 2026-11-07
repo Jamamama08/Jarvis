@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { formatBytes, relativeTime } from "../lib/format";
 import type { Backup, Effort, Preferences, SettingsResponse, UsageSummary, User } from "../lib/types";
 import { getVoiceProvider } from "../voice/useVoice";
+import { ConnectionsCard } from "../components/ConnectionsCard";
 import type { VoiceInfo } from "../voice/types";
 
 interface Props {
@@ -30,6 +31,7 @@ export function SettingsView({ user, settings, onSettingsChanged, onOpenSidebar 
           ) : (
             <>
               <ProfileCard user={user} />
+              <ConnectionsCard onKeyChanged={() => void api.getSettings().then(onSettingsChanged)} />
               <AssistantCard settings={settings} onSaved={onSettingsChanged} />
               <VoiceCard settings={settings} onSaved={onSettingsChanged} />
               <UsageCard settings={settings} />

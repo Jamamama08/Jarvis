@@ -302,3 +302,33 @@ export interface AgentTaskDetail extends AgentTask {
   steps: AgentStep[];
   tools: ToolExecution[];
 }
+
+export interface IntegrationsStatus {
+  anthropic: { configured: boolean; source: "env" | "settings" | null; editable: boolean };
+  email: {
+    configured: boolean;
+    username: string | null;
+    imap_host: string | null;
+    smtp_host: string | null;
+    imap_port: number | null;
+    smtp_port: number | null;
+    imap_security: string | null;
+    smtp_security: string | null;
+    from_address: string | null;
+  };
+  calendar: { configured: boolean };
+  notifications: { configured: boolean; kind: string | null };
+  weather: { configured: boolean; provider: string };
+}
+
+export interface EmailSettings {
+  username: string;
+  password: string | null;
+  imap_host: string;
+  imap_port: number;
+  imap_security: "ssl" | "starttls" | "none";
+  smtp_host: string;
+  smtp_port: number;
+  smtp_security: "starttls" | "ssl" | "none";
+  from_address: string;
+}

@@ -80,7 +80,7 @@ test.describe.serial("JARVIS phase 1", () => {
     await signIn(page);
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByLabel("Assistant name").fill("FRIDAY");
-    await page.getByRole("button", { name: "Save" }).nth(1).click();
+    await page.locator(".card").filter({ has: page.getByRole("heading", { name: "Assistant" }) }).getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Saved")).toBeVisible();
     await page.getByRole("button", { name: "Back up now" }).click();
     await expect(page.getByTestId("backup-list")).toContainText("jarvis-");
