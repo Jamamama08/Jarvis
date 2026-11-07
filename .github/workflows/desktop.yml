@@ -7,6 +7,9 @@ name: Desktop build
 on:
   workflow_dispatch:
   push:
+    # Branch pushes build only when desktop files change; version tags always build
+    # (GitHub ignores path filters for tag pushes).
+    branches: ["**"]
     tags: ["v*"]
     paths:
       - "frontend/src-tauri/**"
