@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   Brain,
   Check,
+  GraduationCap,
   ListChecks,
   LogOut,
   MessageSquare,
@@ -93,6 +94,7 @@ export function Sidebar(props: Props) {
         </nav>
 
         <div className="border-t border-line p-2">
+          <NavItem icon={<GraduationCap size={16} />} label="Learn" active={route.view === "learn"} onClick={() => onNavigate({ view: "learn", lessonId: null })} />
           <NavItem icon={<Brain size={16} />} label="Memory" active={route.view === "memory"} onClick={() => onNavigate({ view: "memory" })} />
           <NavItem icon={<ListChecks size={16} />} label="Tasks" active={route.view === "tasks"} onClick={() => onNavigate({ view: "tasks" })} badge={props.tasksNeedingApproval} />
           <NavItem icon={<Wrench size={16} />} label="Tools" active={route.view === "tools"} onClick={() => onNavigate({ view: "tools" })} />

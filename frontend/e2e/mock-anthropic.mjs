@@ -100,8 +100,10 @@ http
       return streamText(res, body, `${title}: done. STEP_RESULT: success`);
     }
     if (body.output_config?.format) {
-      // Structured-output request (memory suggestions): reply with a JSON message, not a stream.
+      // Structured-output request (memory suggestions, lessons): reply with a JSON message, not a stream.
       const prompt = String(body.messages.at(-1)?.content ?? "");
+      const lesson = lessonReply(prompt);
+      if (lesson) return jsonReply(lesson);
       const memories = prompt.includes("vegetarian")
         ? [
             { content: "Is vegetarian.", category: "personal", importance: 4 },
@@ -205,4 +207,45 @@ function streamTool(res, body, name, input) {
   res.write(frame("message_delta", { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 20 } }));
   res.write(frame("message_stop", { type: "message_stop" }));
   res.end();
+}
+
+/** Visual lessons: an overview for the whole deck, scenes for each requested slide, tutor answers. */
+function lessonReply(prompt) {
+  if (prompt.includes("<deck>")) {
+    return {
+      title: "How plants make food",
+      summary: "You will see how plants turn light, water and air into sugar.",
+      objectives: ["Explain photosynthesis", "Name its inputs and outputs"],
+      glossary: [{ term: "Chlorophyll", definition: "The green pigment that absorbs light." }],
+    };
+  }
+  if (prompt.includes("<question>")) {
+    return { answer: "Chloroplasts are **tiny factories** inside leaf cells." };
+  }
+  const wanted = prompt.match(/Write one scene for each of slides ([\d, ]+)\./);
+  if (!wanted) return null;
+  const kinds = ["flow", "cycle", "hierarchy", "compare", "timeline", "bars", "concept_map", "layers"];
+  const node = (label, extra = {}) => ({ label, detail: `${label} detail`, value: 0, parent: -1, points: [], ...extra });
+  const scenes = wanted[1].split(",").map((n) => Number(n.trim())).map((slide) => {
+    const kind = kinds[(slide - 1) % kinds.length];
+    const nodes = kind === "hierarchy" || kind === "concept_map"
+      ? [node("Plant"), node("Leaf", { parent: 0 }), node("Root", { parent: 0 }), node("Chloroplast", { parent: 1 })]
+      : kind === "bars"
+        ? [node("Blue light", { value: 45 }), node("Red light", { value: 40 }), node("Green light", { value: 15 })]
+        : kind === "compare"
+          ? [node("Light reactions", { points: ["Need light", "Make oxygen"] }), node("Calvin cycle", { points: ["Uses CO2", "Makes sugar"] })]
+          : [node("Light"), node("Water"), node("Sugar")];
+    return {
+      slide,
+      title: `Scene ${slide}: ${kind.replace("_", " ")}`,
+      hook: "Every breath you take depends on this.",
+      narration: `Plants capture sunlight with chlorophyll.\n\nThey use it to build sugar from water and carbon dioxide (slide ${slide}).`,
+      key_points: ["Light is the energy source", "Oxygen is a by-product"],
+      visual: { kind, caption: `A ${kind} diagram`, unit: kind === "bars" ? "%" : "", nodes },
+      analogy: "A leaf is like a solar-powered kitchen.",
+      example: "An oak tree makes its own food all summer.",
+      check: { question: `Quiz ${slide}: what does a plant release?`, options: ["Oxygen", "Helium", "Smoke"], answer: 0, explanation: "Oxygen is released when water is split." },
+    };
+  });
+  return { scenes };
 }

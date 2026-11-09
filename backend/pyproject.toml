@@ -15,6 +15,9 @@ dependencies = [
     "tzdata; sys_platform == 'win32'",
     "playwright>=1.48",  # browser automation; run `python -m playwright install chromium` once
     "icalendar>=6",  # calendar integration (iCalendar feeds)
+    "python-pptx>=1.0",  # reads uploaded slideshows (visual lessons)
+    "pypdf>=5",  # reads PDF slideshows
+    "python-multipart>=0.0.9",  # file uploads
     "recurring-ical-events>=3",  # expands recurring calendar events  # time-zone database for the date/time tool on Windows
 ]
 

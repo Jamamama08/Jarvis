@@ -40,7 +40,7 @@ export default defineConfig({
   projects: [
     { name: "offline", testMatch: "app.spec.ts", use: { baseURL: `http://127.0.0.1:${OFFLINE_PORT}` } },
     { name: "setup", testMatch: "connections.spec.ts", use: { baseURL: `http://127.0.0.1:${SETUP_PORT}` } },
-    { name: "claude", testMatch: /(claude|memory|voice|tools|automation|tasks)\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${CLAUDE_PORT}` } },
+    { name: "claude", testMatch: /(claude|memory|voice|tools|automation|tasks|learn)\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${CLAUDE_PORT}` } },
   ],
   webServer: [
     {

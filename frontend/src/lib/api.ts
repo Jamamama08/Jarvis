@@ -20,6 +20,9 @@ import type {
   ToolExecution,
   ToolsOverview,
   Preferences,
+  LessonDetail,
+  LessonLevel,
+  LessonSummary,
   SettingsResponse,
   StreamEvent,
   UsageSummary,
@@ -88,7 +91,7 @@ async function rawRequest(path: string, init: RequestInit = {}): Promise<Respons
   const headers = new Headers(init.headers);
   const token = tokenStore.get();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   let res: Response;
   try {
     res = await fetch(API_BASE + path, { ...init, headers });
@@ -203,6 +206,27 @@ export const api = {
     request<Task>(`/api/tasks/${id}`, json("PATCH", body)),
   deleteTask: (id: string) => request<void>(`/api/tasks/${id}`, json("DELETE")),
 
+  listLessons: () => request<LessonSummary[]>("/api/lessons"),
+  lesson: (id: string) => request<LessonDetail>(`/api/lessons/${id}`),
+  uploadLesson: (file: File, opts: { title?: string; level?: LessonLevel } = {}) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (opts.title) form.append("title", opts.title);
+    form.append("level", opts.level ?? "standard");
+    return request<LessonDetail>("/api/lessons", { method: "POST", body: form });
+  },
+  updateLesson: (
+    id: string,
+    body: { title?: string; position?: number; answer?: [number, number]; completed?: boolean; reset_progress?: boolean },
+  ) => request<LessonSummary>(`/api/lessons/${id}`, json("PATCH", body)),
+  retryLesson: (id: string, body: { level?: LessonLevel; rebuild?: boolean } = {}) =>
+    request<LessonSummary>(`/api/lessons/${id}/retry`, json("POST", body)),
+  deleteLesson: (id: string) => request<void>(`/api/lessons/${id}`, json("DELETE")),
+  askLesson: (id: string, slide: number, question: string) =>
+    request<{ answer: string }>(`/api/lessons/${id}/ask`, json("POST", { slide, question })),
+  /** Slide pictures need the auth header, so they're fetched as blobs (caller revokes the URL). */
+  lessonImage: async (id: string, slide: number) =>
+    URL.createObjectURL(await (await rawRequest(`/api/lessons/${id}/slides/${slide}/image`)).blob()),
   usage: (days = 30) => request<UsageSummary>(`/api/usage?days=${days}`),
   listBackups: () => request<Backup[]>("/api/system/backups"),
   createBackup: () => request<Backup>("/api/system/backups", json("POST")),

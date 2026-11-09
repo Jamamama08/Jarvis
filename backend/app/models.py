@@ -383,3 +383,33 @@ class DesktopApp(TimestampMixin, Base):
     #: Whether JARVIS may pass one extra argument: a web URL or a file in the workspace.
     allow_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+
+
+# ---------------------------------------------------------------------------
+# Visual lessons from slideshows
+# ---------------------------------------------------------------------------
+
+
+class Lesson(TimestampMixin, Base):
+    """A slideshow the user uploaded and the visual lesson Claude built from it."""
+
+    __tablename__ = "lessons"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # pptx | pdf | text
+    #: processing | ready | failed
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: How deep the explanations go: intro | standard | advanced
+    level: Mapped[str] = mapped_column(String(16), nullable=False, default="standard")
+    #: Extracted slides: [{index, title, text, notes, image}] (image = stored file name or null).
+    slides: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    #: Lesson overview: {summary, objectives, glossary}.
+    overview: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    #: One scene per slide (see services/lessons.py SCENE_SCHEMA).
+    scenes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    #: Learner progress: {position, answers: {slide: chosen option}, completed}.
+    progress: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

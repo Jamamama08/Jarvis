@@ -332,3 +332,73 @@ export interface EmailSettings {
   smtp_security: "starttls" | "ssl" | "none";
   from_address: string;
 }
+
+// --- Visual lessons ---------------------------------------------------------
+
+export type LessonLevel = "intro" | "standard" | "advanced";
+export type VisualKind = "flow" | "cycle" | "hierarchy" | "compare" | "timeline" | "bars" | "concept_map" | "layers" | "none";
+
+export interface VisualNode {
+  label: string;
+  detail: string;
+  value: number;
+  parent: number;
+  points: string[];
+}
+
+export interface LessonVisualSpec {
+  kind: VisualKind;
+  caption: string;
+  unit: string;
+  nodes: VisualNode[];
+}
+
+export interface LessonCheck {
+  question: string;
+  options: string[];
+  answer: number;
+  explanation: string;
+}
+
+export interface LessonScene {
+  slide: number;
+  title: string;
+  hook: string;
+  narration: string;
+  key_points: string[];
+  visual: LessonVisualSpec;
+  analogy: string;
+  example: string;
+  check: LessonCheck | null;
+}
+
+export interface LessonSlide {
+  index: number;
+  title: string;
+  text: string;
+  notes: string;
+  image: string | null;
+}
+
+export interface LessonSummary {
+  id: string;
+  title: string;
+  source_name: string;
+  source_kind: "pptx" | "pdf" | "text";
+  status: "processing" | "ready" | "failed";
+  error: string | null;
+  level: LessonLevel;
+  slide_count: number;
+  scenes_ready: number;
+  position: number;
+  completed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LessonDetail extends LessonSummary {
+  slides: LessonSlide[];
+  overview: { summary?: string; objectives?: string[]; glossary?: { term: string; definition: string }[] };
+  scenes: LessonScene[];
+  progress: { position?: number; answers?: Record<string, number>; completed?: boolean };
+}

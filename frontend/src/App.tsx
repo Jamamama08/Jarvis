@@ -11,6 +11,7 @@ import { MemoryView } from "./views/MemoryView";
 import { TasksView } from "./views/TasksView";
 import { ToolsView } from "./views/ToolsView";
 import { SettingsView } from "./views/SettingsView";
+import { LearnView } from "./views/LearnView";
 
 export default function App() {
   return (
@@ -136,6 +137,14 @@ function Shell({ user }: { user: User }) {
         )}
         {route.view === "tasks" && (
           <TasksView onOpenSidebar={openSidebar} onOpenConversation={(id) => navigate({ view: "chat", conversationId: id })} />
+        )}
+        {route.view === "learn" && (
+          <LearnView
+            lessonId={route.lessonId}
+            settings={settings}
+            onOpenSidebar={openSidebar}
+            onOpenLesson={(id) => navigate({ view: "learn", lessonId: id })}
+          />
         )}
         {route.view === "tools" && <ToolsView settings={settings} onSettingsChanged={setSettings} onOpenSidebar={openSidebar} />}
       </main>

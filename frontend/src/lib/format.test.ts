@@ -17,7 +17,7 @@ describe("format", () => {
 
 describe("routes", () => {
   it("round-trips", () => {
-    for (const path of ["/", "/c/abc123", "/memory", "/tasks", "/tools", "/settings"]) {
+    for (const path of ["/", "/c/abc123", "/memory", "/tasks", "/tools", "/settings", "/learn", "/learn/l1"]) {
       expect(routePath(parseRoute(path))).toBe(path);
     }
     expect(parseRoute("/unknown")).toEqual({ view: "chat", conversationId: null });

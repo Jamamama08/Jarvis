@@ -5,6 +5,7 @@ export type Route =
   | { view: "memory" }
   | { view: "tasks" }
   | { view: "tools" }
+  | { view: "learn"; lessonId: string | null }
   | { view: "settings" };
 
 export function parseRoute(path: string): Route {
@@ -18,6 +19,8 @@ export function parseRoute(path: string): Route {
       return { view: "tasks" };
     case "tools":
       return { view: "tools" };
+    case "learn":
+      return { view: "learn", lessonId: parts[1] || null };
     case "settings":
       return { view: "settings" };
     default:
@@ -27,6 +30,7 @@ export function parseRoute(path: string): Route {
 
 export function routePath(route: Route): string {
   if (route.view === "chat") return route.conversationId ? `/c/${route.conversationId}` : "/";
+  if (route.view === "learn") return route.lessonId ? `/learn/${route.lessonId}` : "/learn";
   return `/${route.view}`;
 }
 

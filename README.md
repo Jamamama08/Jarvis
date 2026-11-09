@@ -19,6 +19,7 @@ A personal AI assistant powered by Claude. It runs as a **web app** in your brow
 - [Tools and permissions](#tools-and-permissions)
 - [Browser and desktop automation](#browser-and-desktop-automation)
 - [Autonomous tasks](#autonomous-tasks)
+- [Visual lessons (Learn)](#visual-lessons-learn)
 - [Connections](#connections)
 - [Deployment and remote access](#deployment-and-remote-access)
 - [Configuration](#configuration)
@@ -294,6 +295,21 @@ You can cancel a running task (stopping any current request), run it again, or d
 
 **Cost:** a task makes several Claude requests (planning, each step and its tool calls, verification), so it costs more than a single message. The token count and estimated cost are shown on each task.
 
+## Visual lessons (Learn)
+
+The **Learn** page turns a slideshow into a visual lesson. Upload a PowerPoint (`.pptx`), a PDF, or a Markdown/text file (slides separated by a line with `---`, or one slide per `#` heading), up to 40 MB and 80 slides. Choose who it's for (beginner, typical student, or someone who knows the basics).
+
+JARVIS reads each slide's title, text, tables, chart data and speaker notes (plus its main picture, shown next to the lesson). Claude then builds the lesson in the background:
+
+- **Overview:** a title, summary, learning objectives and a glossary.
+- **One scene per slide:** an animated diagram chosen to fit the idea (flow, cycle, tree, concept map, side-by-side comparison, timeline, bar chart or layered stack), a spoken-style explanation you can listen to, key points, an analogy, a concrete example and a check-your-understanding question.
+
+While you study, tap any part of a diagram to zoom in on it, or choose **Walk me through it** to highlight each part in turn. Glossary terms are underlined (hover for the definition). **Auto-play** narrates each slide with the browser's voice and moves on, pausing at questions you haven't answered. **Ask about this slide** sends a question to Claude with that slide as context. Your position and answers are saved; the last screen shows your score, the questions worth another look, and a recap. You can rebuild a lesson at a different level.
+
+Scanned (image-only) slides have no text to read and are rejected with a message; old `.ppt` and Keynote files need exporting to `.pptx` or PDF first. Slide content is treated as data: instructions written inside slides are not followed. A build interrupted by a restart, or by an API error, keeps the scenes already made; **Retry** continues from there.
+
+**Cost:** building a lesson makes one Claude request for the overview plus one per 5 slides (roughly 1,500–2,500 output tokens per slide). Each tutor question is one request. All of it shows up in Settings → API usage.
+
 ## Connections
 
 Open **Settings → Connections**. Everything here uses free, standard protocols; no paid service is involved.
@@ -441,6 +457,7 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 | Memory | Free to store and search (local SQLite). Memories sent with a message add input tokens to that request (at most ~6,000 characters, ~1,500 tokens). Each **Suggest memories** click is one Claude request. |
 | Claude API | **Paid, pay-per-token** on your Anthropic account. List prices per million input / output tokens: Opus 5.5 $4 / $20 (default), Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50, Fable 5.1 $10 / $50. Cached history is re-read at ~10% of the input price. Settings → API usage shows your tokens and an estimated cost. |
 | Voice (Phase 4) | Free: browser speech recognition and synthesis. Local engines can be added later. |
+| Visual lessons | Reading slides is free (local). Building a lesson is about 1 + slides/5 Claude requests (~2,000 output tokens per slide); each tutor question is one request. |
 | Tools | Free, except where noted. Tool calls add Claude tokens (each step is one request, and tool results are input tokens). `summarize_document` makes extra Claude requests for long documents. |
 | Web search (optional, off by default) | **$10 per 1,000 searches** plus tokens, billed by Anthropic; at most 5 per request. Web fetch is billed as tokens only. Included in the usage estimate. |
 | Browser automation | Free (local Chromium). Pages read by JARVIS become input tokens. |
@@ -458,4 +475,5 @@ No suite calls the real Anthropic API, so tests are free and need no key.
 - [x] **Phase 5: Tool system.** Tool registry with validated schemas, permission engine (automatic/restricted/sensitive) with in-chat approvals and per-tool rules, redacted execution log, agent loop with step/time/token limits, tools for calculator, date and time, workspace files, document summarizer, task list, memory, Python, and opt-in web search. Tools and Tasks pages.
 - [x] **Phase 6: Browser and desktop automation.** Isolated Playwright browser (open/read/click/type/select) with a private-network guard and password refusal; approved desktop apps and opening workspace documents; Browser & apps settings.
 - [x] **Phase 7: Autonomous tasks.** Planner (structured output), dependency-aware execution with enforced read-only parallelism, approvals on the Tasks page, transient and failure retries, verification report, cancel, re-run, history with cost, restart recovery, `start_task`/`check_task` tools.
+- [x] **Visual lessons (Learn).** Upload a PowerPoint, PDF or Markdown deck; Claude turns each slide into an animated diagram, explanation, analogy, example and quiz, with narration, a per-slide tutor, saved progress and a score.
 - [x] **Phase 8: Integrations and deployment.** Connections (Claude key in Settings, IMAP/SMTP email, iCalendar, ntfy/Discord/Slack notifications, Open-Meteo weather) with a server-side secret store; backend sidecar bundled in the Windows installer with a parent watchdog; in-app browser install; automatic backups; Docker image; CI and desktop-build workflows; remote-access guidance.

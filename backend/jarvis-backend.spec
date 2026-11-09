@@ -5,10 +5,12 @@ hiddenimports = (
     collect_submodules("app")
     + collect_submodules("uvicorn")
     + collect_submodules("aiosqlite")
+    + collect_submodules("pptx")  # imported lazily by services/slides.py
+    + collect_submodules("pypdf")
     + ["sqlalchemy.dialects.sqlite.aiosqlite", "sqlalchemy.dialects.sqlite.pysqlite"]
 )
 datas = [("alembic", "alembic"), ("alembic.ini", ".")]
-datas += collect_data_files("recurring_ical_events") + collect_data_files("icalendar") + collect_data_files("anthropic")
+datas += collect_data_files("recurring_ical_events") + collect_data_files("icalendar") + collect_data_files("anthropic") + collect_data_files("pptx")
 
 a = Analysis(
     ["jarvis_server.py"],

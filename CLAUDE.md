@@ -105,3 +105,11 @@ cd frontend && npx vite build && npx playwright test --trace off
 - Desktop: `jarvis_server.py` + `jarvis-backend.spec` (PyInstaller one-file) → `scripts/build-sidecar.*` → `src-tauri/binaries/jarvis-backend-<triple>`. `lib.rs` spawns it with `JARVIS_PARENT_PID`; `core/watchdog.py` exits the backend when the app dies. Code that differs when frozen checks `config.FROZEN` (no `frontend_dist`, `python_exec.python_executable()`, browser install via the bundled driver). New runtime data files or lazily imported modules must be added to the spec.
 - `services/backup.py` `backup_scheduler` (every `backup_interval_hours`). Docker: `Dockerfile` + `docker-compose.yml` (compose pins `JARVIS_HOST`/`JARVIS_DATA_DIR` over `.env`, publishes on 127.0.0.1 only). CI: `.github/workflows/ci.yml` (all suites), `desktop.yml` (Windows installers).
 - Never weaken: setup token when not on loopback, desktop control only on loopback, no direct public exposure (README → Deployment).
+
+## Visual lessons notes
+
+- `services/slides.py`: extraction only (`.pptx` via python-pptx, PDF text via pypdf, Markdown split on `---`/headings). Limits: 40 MB upload, zip-bomb check before parsing, 80 slides, clipped text. Only PNG/JPEG/GIF/WebP pictures are kept (never SVG); they're stored under `<data dir>/lessons/<id>/` and served only to the owner.
+- `services/lessons.py`: `complete_json` calls (overview, then scenes in batches of `BATCH_SIZE`), `clean_scene` sanitises everything Claude returns (the frontend trusts it), `LessonRunner` (on `app.state.lessons`) runs builds in the background, saves after every batch, resumes on retry and `recover()`s at startup. Every call records `api_usage`.
+- Slides are untrusted data: prompts wrap them in `<slide>` tags and say not to follow instructions in them.
+- Frontend: `views/LearnView.tsx` (library + upload), `components/lesson/LessonPlayer.tsx` (intro, scenes, quiz, tutor, finish), `components/lesson/LessonVisual.tsx` (one renderer per `visual.kind`). Narration goes through `useVoice`. Adding a diagram kind means updating `VISUAL_KINDS` + the prompt, the renderer, the e2e mock and the tests.
+- Theme gotcha: `text-base` resolves to the `--color-base` colour token here, not a font size. Use `text-[16px]`.
