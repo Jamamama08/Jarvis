@@ -1,0 +1,6 @@
+# Place files built by `rojo build` (your real place lives on Roblox)
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+sourcemap.json
